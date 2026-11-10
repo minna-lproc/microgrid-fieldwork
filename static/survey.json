@@ -34,7 +34,7 @@
         },
         {
           "id": "A3",
-          "label": "Number of household members living here for most of the year: ______ ;",
+          "label": "Number of household members living here for most of the year.",
           "type": "fields",
           "options": [],
           "help": "Leave unknown values blank. Zero means none.",

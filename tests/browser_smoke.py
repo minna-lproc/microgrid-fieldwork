@@ -44,6 +44,28 @@ try:
         page.get_by_role('button',name='Verify interview').click()
         page.get_by_role('dialog').get_by_text('verified',exact=True).wait_for()
         page.get_by_role('button',name='Close dialog').click()
+        # Deletion requires a second dialog and exact respondent confirmation.
+        rows_before=page.request.get(url+'/api/dashboard').json()['surveys']
+        to_delete=rows_before[0]
+        page.locator('[data-survey]').first.click()
+        page.get_by_role('button',name='Delete interview',exact=True).click()
+        assert page.get_by_role('button',name='Delete permanently').is_disabled()
+        page.get_by_role('button',name='Keep interview').click()
+        assert len(page.request.get(url+'/api/dashboard').json()['surveys'])==len(rows_before)
+        page.get_by_role('button',name='Delete interview',exact=True).click()
+        page.locator('#delete-submission-confirm').fill('WRONG-REFERENCE')
+        assert page.get_by_role('button',name='Delete permanently').is_disabled()
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.get_by_role('dialog').screenshot(path=str(artifacts/'delete-interview-mobile.png'))
+        page.set_viewport_size({'width':1440,'height':1050})
+        page.locator('#delete-submission-confirm').fill(to_delete['respondent'])
+        page.get_by_role('button',name='Delete permanently').click()
+        page.get_by_role('dialog').wait_for(state='hidden')
+        rows_after=page.request.get(url+'/api/dashboard').json()['surveys']
+        assert len(rows_after)==len(rows_before)-1
+        assert not any(r['id']==to_delete['id'] for r in rows_after)
+        assert page.locator('[data-survey="'+to_delete['id']+'"]').count()==0
         page.locator('[data-view="insights"]').first.click()
         page.get_by_role('heading',name='Listen to the bigger picture.').wait_for()
         page.get_by_role('button',name='Sign out',exact=True).click()
@@ -90,7 +112,7 @@ try:
         page.screenshot(path=str(artifacts/'mobile-survey.png'),full_page=True)
         assert not errors, errors
         browser.close()
-    print('PASS: dashboard, accounts, review, insights, offline reload, reconnect sync, role boundary, mobile layout.')
+    print('PASS: dashboard, accounts, review, insights, offline reload, reconnect sync, role boundary, mobile layout, confirmed single-interview deletion.')
     print('Browser artifacts:',artifacts)
 finally:
     server.terminate()

@@ -42,6 +42,7 @@ def create_app(test_config=None):
         CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','enumerator')), community TEXT DEFAULT '', target INTEGER DEFAULT 30, active INTEGER DEFAULT 1, last_seen TEXT, location TEXT);
         CREATE TABLE IF NOT EXISTS surveys(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), instrument TEXT NOT NULL, community TEXT NOT NULL, respondent TEXT NOT NULL, consent TEXT NOT NULL, gps_consent TEXT, location TEXT, answers TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT NOT NULL, received_at TEXT NOT NULL, version TEXT NOT NULL, review TEXT DEFAULT 'pending');
         CREATE INDEX IF NOT EXISTS surveys_user ON surveys(user_id);
+        CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
         ''')
     def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target']}
@@ -104,8 +105,16 @@ def create_app(test_config=None):
         data=request.get_json(silent=True)
         try: clean=validate_survey(data)
         except (ValueError,TypeError,KeyError) as e: return jsonify(error=str(e)),400
+        # Serialize deletion and sync so a delayed offline retry cannot restore a deleted interview.
+        db().execute('BEGIN IMMEDIATE')
+        deleted=db().execute('SELECT user_id FROM survey_deletions WHERE id=?',(clean['id'],)).fetchone()
+        if deleted:
+            db().rollback()
+            if deleted['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
+            return jsonify(ok=True,id=clean['id'],deleted=True)
         existing=db().execute('SELECT user_id FROM surveys WHERE id=?',(clean['id'],)).fetchone()
         if existing:
+            db().rollback()
             if existing['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
             return jsonify(ok=True,id=clean['id'],duplicate=True)
         db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],json.dumps(clean.get('location')),json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),SCHEMA['version']))
@@ -153,6 +162,26 @@ def create_app(test_config=None):
         if status not in ['pending','verified','flagged']: return jsonify(error='Invalid review status'),400
         cur=db().execute('UPDATE surveys SET review=? WHERE id=?',(status,sid)); db().commit()
         return (jsonify(ok=True),200) if cur.rowcount else (jsonify(error='Survey not found'),404)
+    @app.delete('/api/surveys/<sid>')
+    @login_required('admin')
+    def delete_survey(sid):
+        data=request.get_json(silent=True) or {}
+        if not isinstance(data,dict) or not isinstance(data.get('confirm_respondent'),str):
+            return jsonify(error='Enter the respondent ID to confirm deletion.'),400
+        db().execute('BEGIN IMMEDIATE')
+        record=db().execute('SELECT respondent,user_id FROM surveys WHERE id=?',(sid,)).fetchone()
+        if not record:
+            db().rollback()
+            return jsonify(error='Interview not found. Refresh the submission list.'),404
+        if data['confirm_respondent']!=record['respondent']:
+            db().rollback()
+            return jsonify(error='The confirmation must exactly match the respondent ID.'),400
+        # Retain only IDs and deletion metadata, never the answers, location or respondent code.
+        db().execute('INSERT INTO survey_deletions(id,user_id,deleted_by,deleted_at) VALUES(?,?,?,?)',
+                     (sid,record['user_id'],g.user['id'],now()))
+        db().execute('DELETE FROM surveys WHERE id=?',(sid,))
+        db().commit()
+        return jsonify(ok=True,id=sid)
     @app.get('/api/export')
     @login_required('admin')
     def export():

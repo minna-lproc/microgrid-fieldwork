@@ -75,3 +75,44 @@ def test_schema_coverage(env):
  for letter,n in counts.items(): assert all(letter+str(i) in ids for i in range(1,n+1))
  for table in ['C_loads','D_equipment','I_profile','J_facilities','O_checklist']:assert table in ids
  assert 'Data Privacy Act of 2012' in SCHEMA['consent']
+
+def test_delete_requires_admin_and_exact_confirmation(env):
+ app,c=env;field_headers=login(c);s=survey()
+ assert c.post('/api/surveys',json=s,headers=field_headers).status_code==201
+ url='/api/surveys/'+s['id']
+ assert c.delete(url,json={'confirm_respondent':s['respondent']},headers=field_headers).status_code==403
+ c.post('/api/logout',headers=field_headers)
+ assert c.delete(url,json={'confirm_respondent':s['respondent']}).status_code==401
+ admin_headers=login(c,'admin')
+ assert c.delete(url,json={'confirm_respondent':s['respondent']}).status_code==403
+ for body in [{},{'confirm_respondent':'wrong'},{'confirm_respondent':s['respondent']+' '},['invalid']]:
+  assert c.delete(url,json=body,headers=admin_headers).status_code==400
+ assert len(c.get('/api/dashboard').json['surveys'])==1
+ assert c.delete('/api/surveys/'+str(uuid.uuid4()),json={'confirm_respondent':s['respondent']},headers=admin_headers).status_code==404
+
+
+def test_delete_one_updates_history_exports_and_counts_without_recreating(env):
+ app,c=env;h=login(c);deleted=survey();retained=survey();retained['respondent']='BUC-002'
+ for item in [deleted,retained]:assert c.post('/api/surveys',json=item,headers=h).status_code==201
+ h=login(c,'admin')
+ response=c.delete('/api/surveys/'+deleted['id'],json={'confirm_respondent':deleted['respondent']},headers=h)
+ assert response.status_code==200 and response.json['id']==deleted['id']
+ dashboard=c.get('/api/dashboard').json
+ assert [s['id'] for s in dashboard['surveys']]==[retained['id']]
+ assert next(u for u in dashboard['users'] if u['id']=='field')['completed']==1
+ assert deleted['id'] not in c.get('/api/export').text
+ assert deleted['respondent'] not in c.get('/api/export').text
+ assert [s['id'] for s in c.get('/api/export?format=json').json['surveys']]==[retained['id']]
+ h=login(c)
+ assert [s['id'] for s in c.get('/api/my-surveys').json['surveys']]==[retained['id']]
+ retry=c.post('/api/surveys',json=deleted,headers=h)
+ assert retry.status_code==200 and retry.json['deleted'] is True
+ assert [s['id'] for s in c.get('/api/my-surveys').json['surveys']]==[retained['id']]
+ h=login(c,'other')
+ assert c.post('/api/surveys',json=deleted,headers=h).status_code==409
+ con=sqlite3.connect(app.config['DATABASE']);con.row_factory=sqlite3.Row
+ tombstone=con.execute('SELECT * FROM survey_deletions').fetchone()
+ assert set(tombstone.keys())=={'id','user_id','deleted_by','deleted_at'}
+ assert tombstone['id']==deleted['id'] and tombstone['deleted_by']=='admin'
+ assert con.execute('SELECT count(*) FROM users').fetchone()[0]==3
+ con.close()

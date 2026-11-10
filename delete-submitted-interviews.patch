@@ -1,0 +1,221 @@
+diff --git a/app.py b/app.py
+index cf3e3a2..e5763f7 100644
+--- a/app.py
++++ b/app.py
+@@ -42,6 +42,7 @@ def create_app(test_config=None):
+         CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','enumerator')), community TEXT DEFAULT '', target INTEGER DEFAULT 30, active INTEGER DEFAULT 1, last_seen TEXT, location TEXT);
+         CREATE TABLE IF NOT EXISTS surveys(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), instrument TEXT NOT NULL, community TEXT NOT NULL, respondent TEXT NOT NULL, consent TEXT NOT NULL, gps_consent TEXT, location TEXT, answers TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT NOT NULL, received_at TEXT NOT NULL, version TEXT NOT NULL, review TEXT DEFAULT 'pending');
+         CREATE INDEX IF NOT EXISTS surveys_user ON surveys(user_id);
++        CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
+         ''')
+     def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target']}
+@@ -104,8 +105,16 @@ def create_app(test_config=None):
+         data=request.get_json(silent=True)
+         try: clean=validate_survey(data)
+         except (ValueError,TypeError,KeyError) as e: return jsonify(error=str(e)),400
++        # Serialize deletion and sync so a delayed offline retry cannot restore a deleted interview.
++        db().execute('BEGIN IMMEDIATE')
++        deleted=db().execute('SELECT user_id FROM survey_deletions WHERE id=?',(clean['id'],)).fetchone()
++        if deleted:
++            db().rollback()
++            if deleted['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
++            return jsonify(ok=True,id=clean['id'],deleted=True)
+         existing=db().execute('SELECT user_id FROM surveys WHERE id=?',(clean['id'],)).fetchone()
+         if existing:
++            db().rollback()
+             if existing['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
+             return jsonify(ok=True,id=clean['id'],duplicate=True)
+         db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],json.dumps(clean.get('location')),json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),SCHEMA['version']))
+@@ -153,6 +162,26 @@ def create_app(test_config=None):
+         if status not in ['pending','verified','flagged']: return jsonify(error='Invalid review status'),400
+         cur=db().execute('UPDATE surveys SET review=? WHERE id=?',(status,sid)); db().commit()
+         return (jsonify(ok=True),200) if cur.rowcount else (jsonify(error='Survey not found'),404)
++    @app.delete('/api/surveys/<sid>')
++    @login_required('admin')
++    def delete_survey(sid):
++        data=request.get_json(silent=True) or {}
++        if not isinstance(data,dict) or not isinstance(data.get('confirm_respondent'),str):
++            return jsonify(error='Enter the respondent ID to confirm deletion.'),400
++        db().execute('BEGIN IMMEDIATE')
++        record=db().execute('SELECT respondent,user_id FROM surveys WHERE id=?',(sid,)).fetchone()
++        if not record:
++            db().rollback()
++            return jsonify(error='Interview not found. Refresh the submission list.'),404
++        if data['confirm_respondent']!=record['respondent']:
++            db().rollback()
++            return jsonify(error='The confirmation must exactly match the respondent ID.'),400
++        # Retain only IDs and deletion metadata, never the answers, location or respondent code.
++        db().execute('INSERT INTO survey_deletions(id,user_id,deleted_by,deleted_at) VALUES(?,?,?,?)',
++                     (sid,record['user_id'],g.user['id'],now()))
++        db().execute('DELETE FROM surveys WHERE id=?',(sid,))
++        db().commit()
++        return jsonify(ok=True,id=sid)
+     @app.get('/api/export')
+     @login_required('admin')
+     def export():
+diff --git a/static/app.js b/static/app.js
+index 98243cd..0713509 100644
+--- a/static/app.js
++++ b/static/app.js
+@@ -96,13 +96,31 @@ function validateVisible(){for(const el of document.querySelectorAll('#questions
+ function validateAll(d){const questions=schema.sections.filter(s=>s.instrument===d.instrument).flatMap(s=>s.questions);for(const q of questions){const value=d.answers[q.id];if(!hasAnswer(value))continue;let fields=[];if(q.type==='fields')fields=q.fields.map(f=>[f,value?.[f.id]]);if(q.type==='table')fields=(value||[]).flatMap(row=>q.columns.map(f=>[f,row[f.id]]));for(const [f,v] of fields){if(f.type==='number'&&v!==''&&v!==undefined&&(!Number.isFinite(Number(v))||Number(v)<0||(f.id==='hours'&&Number(v)>24)||((q.id==='A3'||['qty','planned','interruptions'].includes(f.id))&&!Number.isInteger(Number(v)))))throw Error(`${q.id}: check ${f.label}. Use non-negative quantities and at most 24 hours/day.`);if(f.id==='time'&&v&&/[^MAEN /,]/i.test(v))throw Error(`${q.id}: enter M / A / E / N for time of use.`);}}
+  const a=d.answers.A3;if(a&&a.members!==''){for(const key of ['under5','over60','equipment'])if(Number(a[key]||0)>Number(a.members))throw Error('A3: subgroup counts cannot exceed total household members.');if(Number(a.under5||0)+Number(a.over60||0)>Number(a.members))throw Error('A3: age group counts exceed total household members.');}}
+ async function finishInterview(){if(!validateIdentity())return;if(!$('#review-confirm')?.checked){toast('Confirm that you have checked the interview.');return;}try{if(state.draft.consent==='Yes')validateAll(state.draft);}catch(e){toast(e.message);return;}const button=document.querySelector('[data-action="submit-survey"]');if(button)button.disabled=true;try{const d=state.draft;if(d.consent==='No'){d.answers={};d.location=null;}d.status='queued';d.completed_at=new Date().toISOString();delete d.sync_error;await persistDraft();state.draft=null;state.view='drafts';render();toast('Interview saved to the sync queue.');await syncQueue();}catch(e){toast(e.message);if(button)button.disabled=false;}}
+-async function syncQueue(){if(state.syncing||!state.user||!navigator.onLine||!state.csrf)return;state.syncing=true;let sent=0,failed=0;try{await saveChain.catch(()=>{});await getLocal();for(const d of [...state.local].filter(d=>d.status==='queued')){try{await api('surveys',{method:'POST',body:JSON.stringify(d)});await deleteLocal(d.id);sent++;}catch(e){d.sync_error=e.message;await saveLocal(d);failed++;if(e.status===401||e.status===403||!state.online)break;}}if(sent){await loadData();toast(`${sent} interview${sent>1?'s':''} synced successfully.`);}else if(failed)toast('Some interviews need attention. Open My interviews to review.');}finally{state.syncing=false;if(state.view==='drafts'&&!$('#modal').open)render();}const queue=state.local.filter(d=>d.status==='queued');if(queue.length&&'serviceWorker' in navigator){try{const r=await navigator.serviceWorker.ready;await r.sync?.register('gridfield-sync');}catch{}}}
++async function syncQueue(){if(state.syncing||!state.user||!navigator.onLine||!state.csrf)return;state.syncing=true;let sent=0,failed=0,removed=0;try{await saveChain.catch(()=>{});await getLocal();for(const d of [...state.local].filter(d=>d.status==='queued')){try{const result=await api('surveys',{method:'POST',body:JSON.stringify(d)});await deleteLocal(d.id);if(result.deleted)removed++;else sent++;}catch(e){d.sync_error=e.message;await saveLocal(d);failed++;if(e.status===401||e.status===403||!state.online)break;}}if(sent||removed){await loadData();toast([sent?`${sent} interview${sent>1?'s':''} synced successfully.`:'',removed?`${removed} interview${removed>1?'s were':' was'} removed from the queue because an administrator deleted ${removed>1?'them':'it'}.`:''].filter(Boolean).join(' '));}else if(failed)toast('Some interviews need attention. Open My interviews to review.');}finally{state.syncing=false;if(state.view==='drafts'&&!$('#modal').open)render();}const queue=state.local.filter(d=>d.status==='queued');if(queue.length&&'serviceWorker' in navigator){try{const r=await navigator.serviceWorker.ready;await r.sync?.register('gridfield-sync');}catch{}}}
+ function gps(){return new Promise((resolve,reject)=>{if(!navigator.geolocation){reject(Error('Geolocation is not available on this device.'));return;}navigator.geolocation.getCurrentPosition(p=>resolve({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}),e=>reject(Error(e.code===1?'Location permission was denied. You can continue without GPS.':'A location fix is unavailable. Try outdoors or continue without GPS.')),{enableHighAccuracy:true,timeout:12000,maximumAge:60000});});}
+ async function checkin(show=false){if(!state.user||!navigator.onLine||!state.csrf)return;let loc=null;if(state.sharing){try{loc=await gps();state.location=loc;}catch(e){if(show)toast(e.message);}}try{await api('checkin',{method:'POST',body:JSON.stringify({location:loc})});if(show)toast(loc?'Check-in and location shared.':'Check-in sent without a location.');}catch(e){if(show)toast(e.message);}}
+ function modal(title,body,footer=''){const el=$('#modal');el.innerHTML=`<div class="modal-head"><h2>${title}</h2><button class="icon-btn" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body">${body}</div>${footer?`<div class="modal-foot">${footer}</div>`:''}`;if(!el.open)el.showModal();}
+ function userModal(id=null){const u=id?state.data.users.find(u=>u.id===id):null;modal(u?'Manage enumerator':'A new voice in the field',`<p class="subtitle">${u?'Update the assignment, target, or account access.':'Create a field account and share its credentials directly with the enumerator.'}</p><form id="user-form"><div class="form-grid">${u?'':`<div><label class="form-label" for="enum-name">Full name</label><input class="input" id="enum-name" name="name" required maxlength="100" placeholder="e.g. Maria Santos"></div><div><label class="form-label" for="enum-username">Username</label><input class="input" id="enum-username" name="username" required pattern="[A-Za-z0-9._-]+" maxlength="60" autocomplete="off"></div>`}<div><label class="form-label" for="enum-community">Assigned community</label><input class="input" id="enum-community" name="community" maxlength="150" value="${esc(u?.community||'')}"></div><div><label class="form-label" for="enum-target">Interview target</label><input class="input" id="enum-target" name="target" type="number" min="0" max="100000" required value="${u?.target||30}"></div><div class="span2"><label class="form-label" for="enum-password">${u?'New password (leave blank to keep current)':'Temporary password · at least 12 characters'}</label><input class="input" id="enum-password" name="password" type="password" minlength="12" ${u?'':'required'} autocomplete="new-password"></div>${u?`<div class="span2" style="margin-top:20px"><label class="inline-check"><input name="active" type="checkbox" ${u.active?'checked':''}>Account enabled · can sign in and sync interviews</label><p class="card-note">Make sure unsynced work has been collected before disabling an account.</p></div>`:''}</div><p id="user-error" class="error" role="alert"></p><button class="btn primary" type="submit" style="margin-top:23px">${icon('check')}${u?'Save changes':'Create enumerator'}</button></form>`);$('#user-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;const d=Object.fromEntries(new FormData(e.target));if(u)d.active=e.target.elements.active.checked;try{await api(u?'users/'+u.id:'users',{method:u?'PATCH':'POST',body:JSON.stringify(d)});$('#modal').close();await loadData();render();toast(u?'Enumerator updated.':'Enumerator account created.');}catch(err){$('#user-error').textContent=err.message;button.disabled=false;}};}
+ function readableAnswer(q,v){if(q?.type==='table'&&Array.isArray(v))return v.map((r,i)=>hasAnswer(r)?`${q.rows[i]}: ${q.columns.filter(c=>hasAnswer(r[c.id])).map(c=>c.label+' = '+r[c.id]).join(' · ')}`:'').filter(Boolean).join('\n');if(q?.type==='fields'&&typeof v==='object')return q.fields.filter(f=>hasAnswer(v[f.id])).map(f=>f.label+': '+v[f.id]).join('\n');return Array.isArray(v)?v.join(', '):typeof v==='object'?JSON.stringify(v,null,2):String(v);}
+-function surveyModal(id){const s=state.data?.surveys.find(s=>s.id===id);if(!s)return;const qs=Object.fromEntries(schema.sections.flatMap(x=>x.questions).map(q=>[q.id,q]));modal('Interview · '+esc(s.respondent),`<span class="pill ${s.review}">${esc(s.review)}</span>${[['Instrument',instrumentNames[s.instrument]],['Community',s.community],['Enumerator',s.enumerator],['Consent',s.consent],['GPS consent',s.gps_consent],['Completed',fullDate(s.completed_at)],['Received by server',fullDate(s.received_at)],['Location',s.location?`${s.location.lat}, ${s.location.lng} · ±${Math.round(s.location.accuracy)} m`:'Not recorded']].map(([a,b])=>`<div class="detail-row"><span>${a}</span><strong>${esc(b)}</strong></div>`).join('')}<h3 style="margin-top:25px;font-size:14px">Recorded answers</h3>${Object.entries(s.answers).filter(([,v])=>hasAnswer(v)).map(([k,v])=>`<div class="answer-detail"><strong>${esc(k)} · ${esc(qs[k]?.label||(k.endsWith('_details')?'Additional details':''))}</strong><pre>${esc(readableAnswer(qs[k],v))}</pre></div>`).join('')||'<p class="subtitle">No answers recorded.</p>'}`,`<button class="btn" data-review-id="${s.id}" data-review="pending">Pending</button><button class="btn danger" data-review-id="${s.id}" data-review="flagged">Flag for follow-up</button><button class="btn primary" data-review-id="${s.id}" data-review="verified">${icon('check')}Verify interview</button>`);}
++function surveyModal(id){const s=state.data?.surveys.find(s=>s.id===id);if(!s)return;const qs=Object.fromEntries(schema.sections.flatMap(x=>x.questions).map(q=>[q.id,q]));modal('Interview · '+esc(s.respondent),`<span class="pill ${s.review}">${esc(s.review)}</span>${[['Instrument',instrumentNames[s.instrument]],['Community',s.community],['Enumerator',s.enumerator],['Consent',s.consent],['GPS consent',s.gps_consent],['Completed',fullDate(s.completed_at)],['Received by server',fullDate(s.received_at)],['Location',s.location?`${s.location.lat}, ${s.location.lng} · ±${Math.round(s.location.accuracy)} m`:'Not recorded']].map(([a,b])=>`<div class="detail-row"><span>${a}</span><strong>${esc(b)}</strong></div>`).join('')}<h3 style="margin-top:25px;font-size:14px">Recorded answers</h3>${Object.entries(s.answers).filter(([,v])=>hasAnswer(v)).map(([k,v])=>`<div class="answer-detail"><strong>${esc(k)} · ${esc(qs[k]?.label||(k.endsWith('_details')?'Additional details':''))}</strong><pre>${esc(readableAnswer(qs[k],v))}</pre></div>`).join('')||'<p class="subtitle">No answers recorded.</p>'}`,`<button class="btn danger" data-delete-submission="${s.id}">Delete interview</button><button class="btn" data-review-id="${s.id}" data-review="pending">Pending</button><button class="btn danger" data-review-id="${s.id}" data-review="flagged">Flag for follow-up</button><button class="btn primary" data-review-id="${s.id}" data-review="verified">${icon('check')}Verify interview</button>`);}
++function deleteSubmissionModal(id){
++ const s=state.data?.surveys.find(s=>s.id===id);if(!s||state.user.role!=='admin')return;
++ modal('Delete submitted interview?',`<p class="subtitle">This permanently removes this interview from synced records, dashboard totals, and future exports. Existing downloaded copies and backups are unchanged.</p><div class="detail-row"><span>Respondent ID</span><strong>${esc(s.respondent)}</strong></div><div class="detail-row"><span>Community</span><strong>${esc(s.community)}</strong></div><div class="detail-row"><span>Enumerator</span><strong>${esc(s.enumerator)}</strong></div><div class="detail-row"><span>Completed</span><strong>${esc(fullDate(s.completed_at))}</strong></div><label class="form-label" for="delete-submission-confirm">Type the respondent ID exactly to confirm</label><input class="input" id="delete-submission-confirm" autocomplete="off" spellcheck="false" maxlength="150" placeholder="${esc(s.respondent)}"><p class="error" id="delete-submission-error" role="alert"></p>`,`<button class="btn" id="cancel-submission-delete">Keep interview</button><button class="btn danger" id="confirm-submission-delete" disabled>Delete permanently</button>`);
++ const input=$('#delete-submission-confirm'),button=$('#confirm-submission-delete');
++ input.oninput=()=>{button.disabled=input.value!==s.respondent;};
++ $('#cancel-submission-delete').onclick=()=>surveyModal(id);
++ button.onclick=async()=>{
++  if(input.value!==s.respondent)return;button.disabled=true;input.disabled=true;$('#cancel-submission-delete').disabled=true;
++  try{
++   await api('surveys/'+id,{method:'DELETE',body:JSON.stringify({confirm_respondent:input.value})});
++   state.data.surveys=state.data.surveys.filter(x=>x.id!==id);
++   const owner=state.data.users.find(u=>u.id===s.user_id);if(owner&&s.consent==='Yes')owner.completed=Math.max(0,owner.completed-1);
++   if(state.mySurveys)state.mySurveys=state.mySurveys.filter(x=>x.id!==id);
++   $('#modal').close();await loadData();render();toast('Interview permanently deleted.');
++  }catch(e){$('#delete-submission-error').textContent=e.message;input.disabled=false;button.disabled=input.value!==s.respondent;$('#cancel-submission-delete').disabled=false;}
++ };
++ input.focus();
++}
+ function exportModal(){modal('Take the data further',`<p class="subtitle">Export all synced interviews in this workspace. Exports include respondent codes, survey answers, consent, and any recorded GPS coordinates. Store and share them with the same care as the survey records.</p><div class="notice" style="margin-top:20px">Dashboard filters do not limit these exports. Unsynced interviews on devices are not included.</div>`,`<a class="btn" href="/api/export?format=json" download>${icon('download')}JSON + survey schema</a><a class="btn primary" href="/api/export" download>${icon('download')}Download CSV</a>`);}
+ async function signOut(){await saveChain.catch(()=>{});if(state.draft){try{await persistDraft();}catch{return;}}if(!navigator.onLine){toast('Reconnect to sign out of the server session. You can lock this device now.');modal('Lock this device?',`<p class="subtitle">You are offline. Locking removes the remembered account from this browser. The server session will be closed when this device reconnects. Drafts stay on this device for the same account.</p>`,`<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="lock-offline">Lock device</button>`);return;}try{await api('logout',{method:'POST'});finishLogout();}catch(e){if(e.status===401)finishLogout();else toast(e.message);}}
+ function finishLogout(){clearInterval(refreshTimer);localStorage.removeItem('gridfield-user');state.user=null;state.csrf=null;state.draft=null;state.data=null;state.mySurveys=[];state.location=null;state.sharing=false;state.local=[];$('#modal').close();loginScreen();}
+@@ -131,13 +149,13 @@ async function action(name){switch(name){
+  case 'activity':{const pending=state.data?.surveys.filter(s=>s.review==='pending').length||0;modal('Workspace activity',`<div class="detail-row"><span>Local queued interviews</span><strong>${state.local.filter(d=>d.status==='queued').length}</strong></div><div class="detail-row"><span>Local drafts</span><strong>${state.local.filter(d=>d.status==='draft').length}</strong></div>${state.user.role==='admin'?`<div class="detail-row"><span>Pending review</span><strong>${pending}</strong></div>`:''}<p class="subtitle">Keep this app open after reconnecting so your offline work can reach the server.</p>`,`<button class="btn primary" data-action="activity-done">View ${state.user.role==='admin'?'responses':'my interviews'}</button>`);break;}
+  case 'activity-done':$('#modal').close();navigate(state.user.role==='admin'?'responses':'drafts');break;
+  }}
+-document.addEventListener('click',async e=>{const el=e.target.closest('button,[data-view]');if(!el||el.disabled)return;try{if(el.dataset.view){navigate(el.dataset.view);return;}if(el.dataset.action){await action(el.dataset.action);return;}if(el.dataset.start){await startInterview(el.dataset.start);return;}if(el.dataset.step!==undefined){await setStep(Number(el.dataset.step));return;}if(el.dataset.clear){delete state.draft.answers[el.dataset.clear];await persistDraft();render();return;}if(el.dataset.editUser){userModal(el.dataset.editUser);return;}if(el.dataset.survey){surveyModal(el.dataset.survey);return;}if(el.dataset.reviewId){await api('surveys/'+el.dataset.reviewId,{method:'PATCH',body:JSON.stringify({review:el.dataset.review})});await loadData();render();surveyModal(el.dataset.reviewId);toast('Review status updated.');return;}if(el.dataset.resume){if(state.syncing){toast('Wait for sync to finish before editing.');return;}const d=state.local.find(x=>x.id===el.dataset.resume);if(!d)return;d.status='draft';delete d.sync_error;await saveLocal(d);state.draft=d;state.step=d.step||0;state.view='collect';render();return;}if(el.dataset.delete){const d=state.local.find(x=>x.id===el.dataset.delete);modal('Remove this local interview?',`<p class="subtitle">${esc(d?.respondent||'This draft')} will be permanently removed from this device. Unsynced work cannot be recovered.</p>`,`<button class="btn" data-action="close-modal">Keep interview</button><button class="btn danger" id="confirm-delete">Remove local interview</button>`);$('#confirm-delete').onclick=async()=>{if(state.syncing){toast('Wait for sync to finish.');return;}await deleteLocal(el.dataset.delete);$('#modal').close();render();};}}catch(err){toast(err.message||'Something went wrong. Try again.');}});
++document.addEventListener('click',async e=>{const el=e.target.closest('button,[data-view]');if(!el||el.disabled)return;try{if(el.dataset.view){navigate(el.dataset.view);return;}if(el.dataset.action){await action(el.dataset.action);return;}if(el.dataset.start){await startInterview(el.dataset.start);return;}if(el.dataset.step!==undefined){await setStep(Number(el.dataset.step));return;}if(el.dataset.clear){delete state.draft.answers[el.dataset.clear];await persistDraft();render();return;}if(el.dataset.editUser){userModal(el.dataset.editUser);return;}if(el.dataset.survey){surveyModal(el.dataset.survey);return;}if(el.dataset.deleteSubmission){deleteSubmissionModal(el.dataset.deleteSubmission);return;}if(el.dataset.reviewId){await api('surveys/'+el.dataset.reviewId,{method:'PATCH',body:JSON.stringify({review:el.dataset.review})});await loadData();render();surveyModal(el.dataset.reviewId);toast('Review status updated.');return;}if(el.dataset.resume){if(state.syncing){toast('Wait for sync to finish before editing.');return;}const d=state.local.find(x=>x.id===el.dataset.resume);if(!d)return;d.status='draft';delete d.sync_error;await saveLocal(d);state.draft=d;state.step=d.step||0;state.view='collect';render();return;}if(el.dataset.delete){const d=state.local.find(x=>x.id===el.dataset.delete);modal('Remove this local interview?',`<p class="subtitle">${esc(d?.respondent||'This draft')} will be permanently removed from this device. Unsynced work cannot be recovered.</p>`,`<button class="btn" data-action="close-modal">Keep interview</button><button class="btn danger" id="confirm-delete">Remove local interview</button>`);$('#confirm-delete').onclick=async()=>{if(state.syncing){toast('Wait for sync to finish.');return;}await deleteLocal(el.dataset.delete);$('#modal').close();render();};}}catch(err){toast(err.message||'Something went wrong. Try again.');}});
+ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;});
+ window.addEventListener('online',async()=>{state.online=true;updateConnection();await completePendingLogout();if(state.user){try{const s=await api('session');if(s.user?.id===state.user.id)state.csrf=s.csrf;else state.csrf=null;}catch{}await syncQueue();await checkin();await loadData();if(!state.draft&&!$('#modal').open)render();}});
+ window.addEventListener('offline',()=>{state.online=false;updateConnection();});
+ window.addEventListener('beforeunload',e=>{if(state.draft&&$('#save-indicator')?.textContent!=='Saved on this device'){e.preventDefault();e.returnValue='';}});
+ async function completePendingLogout(){if(!localStorage.getItem('gridfield-pending-logout'))return;const s=await api('session');if(s.user){const old=state.csrf;state.csrf=s.csrf;await api('logout',{method:'POST'});state.csrf=old;}localStorage.removeItem('gridfield-pending-logout');}
+-async function boot(){try{db=await openDB();schema=await fetch('/static/survey.json').then(r=>r.json());if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',e=>{if(e.data.type==='sync')syncQueue();});try{await navigator.serviceWorker.register('/sw.js');navigator.serviceWorker.ready.then(async()=>{const cache=await caches.open('gridfield-shell-v3');state.ready=!!(await cache.match('/static/survey.json'));if(state.view==='collect'&&!state.draft&&state.user)render();});}catch{}}
++async function boot(){try{db=await openDB();schema=await fetch('/static/survey.json').then(r=>r.json());if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',e=>{if(e.data.type==='sync')syncQueue();});try{await navigator.serviceWorker.register('/sw.js');navigator.serviceWorker.ready.then(async()=>{const cache=await caches.open('gridfield-shell-v4');state.ready=!!(await cache.match('/static/survey.json'));if(state.view==='collect'&&!state.draft&&state.user)render();});}catch{}}
+  try{await completePendingLogout();const s=await api('session');Object.assign(state,s);if(s.user)localStorage.setItem('gridfield-user',JSON.stringify(s.user));else localStorage.removeItem('gridfield-user');}catch{const saved=localStorage.getItem('gridfield-user');if(saved&&!localStorage.getItem('gridfield-pending-logout'))state.user=JSON.parse(saved);state.csrf=null;}
+  if(state.user){state.view=state.user.role==='admin'?'overview':'collect';state.sharing=localStorage.getItem('gridfield-sharing-'+state.user.id)==='true';await getLocal();await loadData();render();startTimers();await syncQueue();await checkin();}else loginScreen();
+  }catch(e){app.innerHTML=`<div class="boot"><h1>Gridfield needs device storage.</h1><p class="subtitle">Enable browser storage and reconnect to finish setting up the app.<br>${esc(e.message)}</p><button class="btn" id="reload">Try again</button></div>`;$('#reload').onclick=()=>location.reload();}}
+diff --git a/static/style.css b/static/style.css
+index 2933d9f..93fd47c 100644
+--- a/static/style.css
++++ b/static/style.css
+@@ -5,3 +5,5 @@
+ @media(max-width:700px){.sidebar{transform:translateX(-100%);transition:transform .2s;width:235px;box-shadow:8px 0 25px #10291b22}.sidebar.open{transform:translateX(0)}.shell{display:block}.topbar{height:62px;padding:0 18px}.mobile-menu{display:inline-block}.breadcrumb{display:none}.top-tools{gap:14px}.content{padding:25px 18px}.heading{gap:12px;flex-wrap:wrap;margin-bottom:22px}h1{font-size:26px}.heading .actions{max-width:none;justify-content:start}.eyebrow{font-size:9px}.subtitle{font-size:11px}.filters{align-items:start}.filter-left{flex-wrap:wrap}.updated{display:none}.stats{gap:10px}.stat{min-height:136px;padding:16px}.stat .value{font-size:29px}.stat .foot{font-size:9px;line-height:1.5}.chart-grid{gap:17px}.chart{gap:8px}.card-head{padding:18px 17px 0}.card-head h2{font-size:12px}.coverage{gap:30px}.team-cards{gap:10px}.person-card{padding:15px}.person-top strong{font-size:10px}.search input{width:110px}.table-head{padding:16px;flex-wrap:wrap}.table-head h2{font-size:12px}td,th{padding:12px 16px}.page-footer{line-height:1.8;gap:20px}.page-footer span:last-child{display:none}.roster-grid{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.span2{grid-column:auto}.insights-grid{grid-template-columns:1fr}.survey-card{padding:20px 16px}.q-label{font-size:12px}.choices,.q-input,.q-help,.question .form-grid{margin-left:0}.q-input{width:100%}.question{padding:20px 0}.survey-nav{gap:10px}.survey-nav span{max-width:100px;line-height:1.6;text-align:center}.login{display:block}.login-story{padding:30px 28px}.login-story .brand{padding:0 0 28px;font-size:27px}.login-story h1{font-size:31px;max-width:290px}.login-story p{font-size:12px;margin-top:15px}.login-story .eyebrow{margin-top:25px}.login-right{padding:35px 28px}.login-box h2{font-size:23px}.demo{font-size:10px;line-height:1.7}.demo span:last-child{display:none}.draft-item{align-items:start;flex-wrap:wrap}.draft-item .actions{margin-top:8px}.table-footer{padding:12px 16px}.notice{font-size:11px}.modal-head{padding:20px}.modal-body{padding:20px}.detail-row{grid-template-columns:1fr;gap:4px}}
+ 
+ @media(max-width:700px){.input,.question table input,.question table select{font-size:16px}.btn{min-height:44px}.q-label{font-size:14px}.q-help{font-size:12px}.choice{font-size:13px;min-height:44px}.form-label{font-size:12px;line-height:1.6}.form-label .input{margin-top:5px}}
++
++.modal-foot{flex-wrap:wrap}
+diff --git a/static/sw.js b/static/sw.js
+index 9ad6646..555d9bc 100644
+--- a/static/sw.js
++++ b/static/sw.js
+@@ -1,4 +1,4 @@
+-const CACHE='gridfield-shell-v3';
++const CACHE='gridfield-shell-v4';
+ const ASSETS=['/','/static/style.css','/static/app.js','/static/survey.json','/static/icon.svg','/static/icon-192.png','/static/icon-512.png','/static/manifest.webmanifest'];
+ self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));});
+ self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
+diff --git a/tests/browser_smoke.py b/tests/browser_smoke.py
+index 74c4048..401bdef 100644
+--- a/tests/browser_smoke.py
++++ b/tests/browser_smoke.py
+@@ -44,6 +44,28 @@ try:
+         page.get_by_role('button',name='Verify interview').click()
+         page.get_by_role('dialog').get_by_text('verified',exact=True).wait_for()
+         page.get_by_role('button',name='Close dialog').click()
++        # Deletion requires a second dialog and exact respondent confirmation.
++        rows_before=page.request.get(url+'/api/dashboard').json()['surveys']
++        to_delete=rows_before[0]
++        page.locator('[data-survey]').first.click()
++        page.get_by_role('button',name='Delete interview',exact=True).click()
++        assert page.get_by_role('button',name='Delete permanently').is_disabled()
++        page.get_by_role('button',name='Keep interview').click()
++        assert len(page.request.get(url+'/api/dashboard').json()['surveys'])==len(rows_before)
++        page.get_by_role('button',name='Delete interview',exact=True).click()
++        page.locator('#delete-submission-confirm').fill('WRONG-REFERENCE')
++        assert page.get_by_role('button',name='Delete permanently').is_disabled()
++        page.set_viewport_size({'width':390,'height':844})
++        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
++        page.get_by_role('dialog').screenshot(path=str(artifacts/'delete-interview-mobile.png'))
++        page.set_viewport_size({'width':1440,'height':1050})
++        page.locator('#delete-submission-confirm').fill(to_delete['respondent'])
++        page.get_by_role('button',name='Delete permanently').click()
++        page.get_by_role('dialog').wait_for(state='hidden')
++        rows_after=page.request.get(url+'/api/dashboard').json()['surveys']
++        assert len(rows_after)==len(rows_before)-1
++        assert not any(r['id']==to_delete['id'] for r in rows_after)
++        assert page.locator('[data-survey="'+to_delete['id']+'"]').count()==0
+         page.locator('[data-view="insights"]').first.click()
+         page.get_by_role('heading',name='Listen to the bigger picture.').wait_for()
+         page.get_by_role('button',name='Sign out',exact=True).click()
+@@ -90,7 +112,7 @@ try:
+         page.screenshot(path=str(artifacts/'mobile-survey.png'),full_page=True)
+         assert not errors, errors
+         browser.close()
+-    print('PASS: dashboard, accounts, review, insights, offline reload, reconnect sync, role boundary, mobile layout.')
++    print('PASS: dashboard, accounts, review, insights, offline reload, reconnect sync, role boundary, mobile layout, confirmed single-interview deletion.')
+     print('Browser artifacts:',artifacts)
+ finally:
+     server.terminate()
+diff --git a/tests/test_app.py b/tests/test_app.py
+index d5f87ec..fa279b0 100644
+--- a/tests/test_app.py
++++ b/tests/test_app.py
+@@ -75,3 +75,44 @@ def test_schema_coverage(env):
+  for letter,n in counts.items(): assert all(letter+str(i) in ids for i in range(1,n+1))
+  for table in ['C_loads','D_equipment','I_profile','J_facilities','O_checklist']:assert table in ids
+  assert 'Data Privacy Act of 2012' in SCHEMA['consent']
++
++def test_delete_requires_admin_and_exact_confirmation(env):
++ app,c=env;field_headers=login(c);s=survey()
++ assert c.post('/api/surveys',json=s,headers=field_headers).status_code==201
++ url='/api/surveys/'+s['id']
++ assert c.delete(url,json={'confirm_respondent':s['respondent']},headers=field_headers).status_code==403
++ c.post('/api/logout',headers=field_headers)
++ assert c.delete(url,json={'confirm_respondent':s['respondent']}).status_code==401
++ admin_headers=login(c,'admin')
++ assert c.delete(url,json={'confirm_respondent':s['respondent']}).status_code==403
++ for body in [{},{'confirm_respondent':'wrong'},{'confirm_respondent':s['respondent']+' '},['invalid']]:
++  assert c.delete(url,json=body,headers=admin_headers).status_code==400
++ assert len(c.get('/api/dashboard').json['surveys'])==1
++ assert c.delete('/api/surveys/'+str(uuid.uuid4()),json={'confirm_respondent':s['respondent']},headers=admin_headers).status_code==404
++
++
++def test_delete_one_updates_history_exports_and_counts_without_recreating(env):
++ app,c=env;h=login(c);deleted=survey();retained=survey();retained['respondent']='BUC-002'
++ for item in [deleted,retained]:assert c.post('/api/surveys',json=item,headers=h).status_code==201
++ h=login(c,'admin')
++ response=c.delete('/api/surveys/'+deleted['id'],json={'confirm_respondent':deleted['respondent']},headers=h)
++ assert response.status_code==200 and response.json['id']==deleted['id']
++ dashboard=c.get('/api/dashboard').json
++ assert [s['id'] for s in dashboard['surveys']]==[retained['id']]
++ assert next(u for u in dashboard['users'] if u['id']=='field')['completed']==1
++ assert deleted['id'] not in c.get('/api/export').text
++ assert deleted['respondent'] not in c.get('/api/export').text
++ assert [s['id'] for s in c.get('/api/export?format=json').json['surveys']]==[retained['id']]
++ h=login(c)
++ assert [s['id'] for s in c.get('/api/my-surveys').json['surveys']]==[retained['id']]
++ retry=c.post('/api/surveys',json=deleted,headers=h)
++ assert retry.status_code==200 and retry.json['deleted'] is True
++ assert [s['id'] for s in c.get('/api/my-surveys').json['surveys']]==[retained['id']]
++ h=login(c,'other')
++ assert c.post('/api/surveys',json=deleted,headers=h).status_code==409
++ con=sqlite3.connect(app.config['DATABASE']);con.row_factory=sqlite3.Row
++ tombstone=con.execute('SELECT * FROM survey_deletions').fetchone()
++ assert set(tombstone.keys())=={'id','user_id','deleted_by','deleted_at'}
++ assert tombstone['id']==deleted['id'] and tombstone['deleted_by']=='admin'
++ assert con.execute('SELECT count(*) FROM users').fetchone()[0]==3
++ con.close()
