@@ -1,0 +1,1254 @@
+{
+  "title": "Community Energy Needs and Microgrid Design Survey",
+  "version": "2026-pilot-1",
+  "consent": "Good day. We are from the University of the Immaculate Conception. We are studying how electricity is used in your community to help plan a possible microgrid. Taking part is voluntary. You may skip any question or stop at any time, and this will not affect any service or benefit you receive. Your answers will be used only for planning and research, reported in groups, and kept confidential in line with the Data Privacy Act of 2012 (R.A. 10173). No decision has been made about building a microgrid in your community. Do you agree to be interviewed?",
+  "sections": [
+    {
+      "id": "A",
+      "title": "Respondent & household",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "A1",
+          "label": "Sex",
+          "type": "select",
+          "options": [
+            "Female",
+            "Male",
+            "Prefer not to say"
+          ],
+          "help": ""
+        },
+        {
+          "id": "A2",
+          "label": "Age",
+          "type": "select",
+          "options": [
+            "18–24",
+            "25–34",
+            "35–49",
+            "50–64",
+            "65 and above"
+          ],
+          "help": ""
+        },
+        {
+          "id": "A3",
+          "label": "Number of household members living here for most of the year: ______ ;",
+          "type": "fields",
+          "options": [],
+          "help": "Leave unknown values blank. Zero means none.",
+          "fields": [
+            {
+              "id": "members",
+              "label": "Total household members",
+              "type": "number"
+            },
+            {
+              "id": "under5",
+              "label": "Under 5 years",
+              "type": "number"
+            },
+            {
+              "id": "over60",
+              "label": "60 years and above",
+              "type": "number"
+            },
+            {
+              "id": "equipment",
+              "label": "Members with disability or needing electrical equipment",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "id": "A4",
+          "label": "Main source of household income (select main one)",
+          "type": "select",
+          "options": [
+            "Farming",
+            "Fishing",
+            "Small business / trading",
+            "Wage work",
+            "Remittances",
+            "Government assistance",
+            "Other:"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "A5",
+          "label": "Approximate total household cash income per month",
+          "type": "select",
+          "options": [
+            "Below ₱2,000",
+            "₱2,000–₱5,999",
+            "₱6,000–₱9,999",
+            "₱10,000–₱19,999",
+            "₱20,000 and above",
+            "RTA"
+          ],
+          "help": "Optional. Use only ranges; do not ask for exact figures."
+        },
+        {
+          "id": "A6",
+          "label": "Is your household a beneficiary of 4Ps or listed in the barangay poverty list?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No",
+            "DK"
+          ],
+          "help": ""
+        },
+        {
+          "id": "A7",
+          "label": "Does the household belong to an Indigenous Cultural Community / Indigenous People (ICC/IP)?",
+          "type": "select",
+          "options": [
+            "Yes:",
+            "No",
+            "RTA"
+          ],
+          "help": "Enumerator: if yes, flag the community for free, prior and informed consent (FPIC) processes with the NCIP.",
+          "details": true
+        },
+        {
+          "id": "A8",
+          "label": "Do you own or rent the dwelling and the land it stands on?",
+          "type": "select",
+          "options": [
+            "Own house and lot",
+            "Own house, land is owned by another / public",
+            "Rent",
+            "Other:"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "A9",
+          "label": "How long has your household lived here?",
+          "type": "select",
+          "options": [
+            "Less than 2 years",
+            "2–5 years",
+            "6–10 years",
+            "More than 10 years"
+          ],
+          "help": ""
+        },
+        {
+          "id": "A10",
+          "label": "Do you expect the household to still live here in 10 years?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Probably",
+            "Unsure",
+            "No"
+          ],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "title": "Current energy supply",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "B1",
+          "label": "What does your household use for lighting and power now? (select all)",
+          "type": "multi",
+          "options": [
+            "Grid / distribution utility",
+            "Existing mini-grid or diesel plant",
+            "Solar home system / solar lamps",
+            "Own diesel or gasoline generator",
+            "Shared or neighbour’s connection",
+            "Batteries / charging service",
+            "Kerosene, candles or firewood",
+            "None"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B2",
+          "label": "On average, how many hours a day do you have electricity?",
+          "type": "select",
+          "options": [
+            "None",
+            "Under 4 hours",
+            "4–7 hours",
+            "8–12 hours",
+            "13–23 hours",
+            "24 hours"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B3",
+          "label": "At what times is electricity available? (select all)",
+          "type": "multi",
+          "options": [
+            "Early morning (4–6 AM)",
+            "Morning (6 AM–12 NN)",
+            "Afternoon (12 NN–6 PM)",
+            "Evening (6–10 PM)",
+            "Late night (10 PM–4 AM)"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B4",
+          "label": "How long have you had this supply arrangement?",
+          "type": "select",
+          "options": [
+            "Under 1 year",
+            "1–3 years",
+            "4–10 years",
+            "More than 10 years"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B5",
+          "label": "In the last 30 days, how many unplanned power interruptions did you experience, and how long did the longest last? Interruptions: ____ ; longest: ____ hours",
+          "type": "fields",
+          "options": [],
+          "help": "Leave unknown values blank. Zero means none.",
+          "fields": [
+            {
+              "id": "interruptions",
+              "label": "Interruptions in last 30 days",
+              "type": "number"
+            },
+            {
+              "id": "longest",
+              "label": "Longest interruption (hours)",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "id": "B6",
+          "label": "What was the effect of the last long interruption? (select all)",
+          "type": "multi",
+          "options": [
+            "Spoiled food or stock",
+            "Lost income",
+            "Children could not study",
+            "Medical or safety problem",
+            "Could not charge phones / communicate",
+            "Little effect"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B7",
+          "label": "How much does your household spend in a typical month on each? (₱, write 0 if none)",
+          "type": "fields",
+          "options": [],
+          "help": "Leave unknown values blank. Zero means none.",
+          "fields": [
+            {
+              "id": "bills",
+              "label": "Electricity bills (₱/month)",
+              "type": "number"
+            },
+            {
+              "id": "fuel",
+              "label": "Generator diesel/gasoline (₱/month)",
+              "type": "number"
+            },
+            {
+              "id": "kerosene",
+              "label": "Kerosene/candles (₱/month)",
+              "type": "number"
+            },
+            {
+              "id": "battery",
+              "label": "Battery charging (₱/month)",
+              "type": "number"
+            },
+            {
+              "id": "cooking",
+              "label": "LPG/firewood (₱/month)",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "id": "B8",
+          "label": "How satisfied are you with your present supply?",
+          "type": "select",
+          "options": [
+            "Very satisfied",
+            "Satisfied",
+            "Neutral",
+            "Dissatisfied",
+            "Very dissatisfied"
+          ],
+          "help": ""
+        },
+        {
+          "id": "B9",
+          "label": "What is the biggest problem with your present supply?",
+          "type": "text",
+          "options": [],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "title": "Appliances & demand",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "C_loads",
+          "label": "Appliance inventory — current use and plans",
+          "type": "table",
+          "rows": [
+            "Lights (LED / CFL / other)",
+            "Phone charger",
+            "Television",
+            "Electric fan",
+            "Refrigerator / freezer",
+            "Rice cooker / electric stove",
+            "Washing machine",
+            "Water pump",
+            "Radio / sound system",
+            "Computer / laptop / router",
+            "Air conditioner",
+            "Electric vehicle / e-bike charging",
+            "Other"
+          ],
+          "columns": [
+            {
+              "id": "qty",
+              "label": "Now (qty)",
+              "type": "number"
+            },
+            {
+              "id": "watts",
+              "label": "Watts",
+              "type": "number"
+            },
+            {
+              "id": "hours",
+              "label": "Hours/day",
+              "type": "number"
+            },
+            {
+              "id": "time",
+              "label": "Time (M/A/E/N)",
+              "type": "text"
+            },
+            {
+              "id": "planned",
+              "label": "Planned in 3 yrs (qty)",
+              "type": "number"
+            },
+            {
+              "id": "notes",
+              "label": "Item / notes",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "id": "C1",
+          "label": "Which appliance would you buy first if reliable electricity were available all day?",
+          "type": "text",
+          "options": [],
+          "help": "Record the first appliance the household would buy."
+        },
+        {
+          "id": "C2",
+          "label": "Do you cook with electricity or plan to?",
+          "type": "select",
+          "options": [
+            "Yes, now",
+            "Yes, if supply and price allow",
+            "No"
+          ],
+          "help": ""
+        },
+        {
+          "id": "C3",
+          "label": "Does anyone in the household depend on electrical medical equipment or refrigerated medicine?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No",
+            "RTA"
+          ],
+          "help": "Priority-load indicator only; do not record the condition."
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "title": "Productive & commercial use",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "D1",
+          "label": "Does anyone in the household run a business or income activity that uses, or could use, electricity?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No (skip to Part E)"
+          ],
+          "help": "If No, skip the rest of Part D."
+        },
+        {
+          "id": "D2",
+          "label": "Type of activity (select all)",
+          "type": "multi",
+          "options": [
+            "Sari-sari store",
+            "Food processing / eatery",
+            "Ice or cold storage",
+            "Fish or crop processing",
+            "Rice, corn or coconut mill",
+            "Welding / carpentry / repair",
+            "Sewing / weaving",
+            "Water refilling / irrigation pump",
+            "Internet / charging / laundry service",
+            "Tourism accommodation",
+            "Other:"
+          ],
+          "help": "Select all that apply. Record equipment in the table below.",
+          "details": true
+        },
+        {
+          "id": "D_equipment",
+          "label": "Business equipment",
+          "type": "table",
+          "rows": [
+            "Equipment 1",
+            "Equipment 2",
+            "Equipment 3"
+          ],
+          "columns": [
+            {
+              "id": "name",
+              "label": "Equipment",
+              "type": "text"
+            },
+            {
+              "id": "qty",
+              "label": "Qty",
+              "type": "number"
+            },
+            {
+              "id": "power",
+              "label": "Watts / hp (specify unit)",
+              "type": "text"
+            },
+            {
+              "id": "hours",
+              "label": "Hours/day",
+              "type": "number"
+            },
+            {
+              "id": "months",
+              "label": "Peak months",
+              "type": "text"
+            },
+            {
+              "id": "fuel",
+              "label": "Fuel (L/month)",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "id": "D3",
+          "label": "If electricity were reliable, would you expand or start an activity?",
+          "type": "select",
+          "options": [
+            "Yes: what and when?",
+            "No",
+            "Unsure"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "D4",
+          "label": "Is your business seasonal?",
+          "type": "select",
+          "options": [
+            "Year-round",
+            "Seasonal: peak months"
+          ],
+          "help": "",
+          "details": true
+        }
+      ]
+    },
+    {
+      "id": "E",
+      "title": "Reliability & resilience",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "E1",
+          "label": "What is the minimum daily supply that would meet your needs?",
+          "type": "select",
+          "options": [
+            "8 hours",
+            "12 hours",
+            "18 hours",
+            "24 hours"
+          ],
+          "help": ""
+        },
+        {
+          "id": "E2",
+          "label": "How long an interruption could your household tolerate before it causes serious trouble?",
+          "type": "select",
+          "options": [
+            "Under 1 hour",
+            "1–4 hours",
+            "4–12 hours",
+            "More than 12 hours"
+          ],
+          "help": ""
+        },
+        {
+          "id": "E3",
+          "label": "During typhoons or floods, what would you want the system to do?",
+          "type": "select",
+          "options": [
+            "Keep only essential facilities powered",
+            "Keep the whole community powered if possible",
+            "Shut down safely and restore quickly",
+            "DK"
+          ],
+          "help": ""
+        },
+        {
+          "id": "E4",
+          "label": "Which hazards have damaged homes or utilities here in the last 10 years? (select all possible answers)",
+          "type": "multi",
+          "options": [
+            "Typhoon / strong wind",
+            "Flood",
+            "Storm surge",
+            "Landslide",
+            "Fire",
+            "Earthquake",
+            "Drought",
+            "None"
+          ],
+          "help": ""
+        },
+        {
+          "id": "E5",
+          "label": "Would you accept short planned shutdowns for maintenance if given advance notice?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Yes, if under 4 hours",
+            "No"
+          ],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "F",
+      "title": "Affordability & payment",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "F1",
+          "label": "Would your household connect to a new 24-hour community microgrid if it were offered?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Yes, depending on price",
+            "Not sure",
+            "No: reason"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "F2",
+          "label": "Considering everything you now spend on energy (B7), what is the most your household could pay per month for reliable electricity?",
+          "type": "select",
+          "options": [
+            "Below ₱300",
+            "₱300–₱599",
+            "₱600–₱999",
+            "₱1,000–₱1,499",
+            "₱1,500–₱1,999",
+            "₱2,000 and above",
+            "DK"
+          ],
+          "help": ""
+        },
+        {
+          "id": "F3",
+          "label": "Which arrangement would you prefer for paying for electricity?",
+          "type": "select",
+          "options": [
+            "Prepaid load by mobile wallet or agent",
+            "Prepaid at a local store",
+            "Monthly bill",
+            "Payment after harvest / catch season",
+            "Pay per use with a small fixed fee"
+          ],
+          "help": ""
+        },
+        {
+          "id": "F4",
+          "label": "How would you prefer to cover a one-time connection cost (wiring, meter, service drop)?",
+          "type": "select",
+          "options": [
+            "Pay upfront if less than ₱",
+            "Instalments added to the bill",
+            "Work contribution to the project",
+            "Would need it fully subsidised",
+            "DK"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "F5",
+          "label": "Is anyone in the household unable to pay the current cost of energy without cutting back on food or other needs?",
+          "type": "select",
+          "options": [
+            "Often",
+            "Sometimes",
+            "Rarely",
+            "Never",
+            "RTA"
+          ],
+          "help": ""
+        },
+        {
+          "id": "F6",
+          "label": "Do you know of any subsidy or lifeline rate for low-income electricity users?",
+          "type": "select",
+          "options": [
+            "Yes:",
+            "No"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "F7",
+          "label": "How much would you need to save per month, compared with what you spend now, to switch to a microgrid?",
+          "type": "select",
+          "options": [
+            "Any saving",
+            "10–19%",
+            "20–39%",
+            "40% or more",
+            "I would pay more for better service"
+          ],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "G",
+      "title": "Metering & service",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "G1",
+          "label": "What kind of metering would you prefer?",
+          "type": "select",
+          "options": [
+            "Individual prepaid meter",
+            "Individual postpaid meter",
+            "Shared meter with neighbours",
+            "Flat monthly fee with a load limit"
+          ],
+          "help": ""
+        },
+        {
+          "id": "G2",
+          "label": "Where would you want to report a problem or complaint? (select all)",
+          "type": "multi",
+          "options": [
+            "Barangay office",
+            "Local technician in the community",
+            "Mobile phone / SMS / chat",
+            "Office in the municipality",
+            "Community association"
+          ],
+          "help": ""
+        },
+        {
+          "id": "G3",
+          "label": "How fast should a fault be repaired?",
+          "type": "select",
+          "options": [
+            "Within 4 hours",
+            "Within 24 hours",
+            "Within 3 days",
+            "Longer is acceptable if the price is lower"
+          ],
+          "help": ""
+        },
+        {
+          "id": "G4",
+          "label": "What information would you want to receive about the service? (select all)",
+          "type": "multi",
+          "options": [
+            "Tariff and how it is computed",
+            "Planned interruptions",
+            "Monthly consumption",
+            "Safety reminders",
+            "How to complain",
+            "How the operator uses the money collected"
+          ],
+          "help": ""
+        },
+        {
+          "id": "G5",
+          "label": "Are you worried about any of these? (select all)",
+          "type": "multi",
+          "options": [
+            "Being disconnected if unable to pay",
+            "Prices rising later",
+            "Meter accuracy",
+            "Safety of wiring or equipment",
+            "Data privacy of usage records",
+            "Service ending when the operator leaves",
+            "None"
+          ],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "H",
+      "title": "Awareness & participation",
+      "instrument": "household",
+      "questions": [
+        {
+          "id": "H1",
+          "label": "Have you heard about microgrids or solar-and-battery community power?",
+          "type": "select",
+          "options": [
+            "Yes, I know what it is",
+            "Heard the word only",
+            "No"
+          ],
+          "help": ""
+        },
+        {
+          "id": "H2",
+          "label": "Overall, how do you feel about a microgrid being built for your community?",
+          "type": "select",
+          "options": [
+            "Strongly support",
+            "Support",
+            "Neutral / need more information",
+            "Oppose",
+            "Strongly oppose"
+          ],
+          "help": ""
+        },
+        {
+          "id": "H3",
+          "label": "What are your main concerns? (select all)",
+          "type": "multi",
+          "options": [
+            "Cost",
+            "Reliability",
+            "Land or house relocation",
+            "Effect on fishing grounds, farms or forest",
+            "Noise or smoke",
+            "Who owns and controls it",
+            "Jobs going to outsiders",
+            "Losing existing service",
+            "None"
+          ],
+          "help": ""
+        },
+        {
+          "id": "H4",
+          "label": "Who would you trust most to run the system?",
+          "type": "select",
+          "options": [
+            "Private company",
+            "Electric cooperative",
+            "Local government",
+            "Community-owned association",
+            "Combination:",
+            "DK"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "H5",
+          "label": "Would a member of your household want to work on the system (operation, meter reading, payments, cleaning panels)?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Maybe with training",
+            "No"
+          ],
+          "help": ""
+        },
+        {
+          "id": "H6",
+          "label": "How do you prefer to receive news and take part in decisions? (select all)",
+          "type": "multi",
+          "options": [
+            "Barangay assembly",
+            "Purok / sitio meeting",
+            "Church or school gathering",
+            "Radio",
+            "Facebook / messaging group",
+            "House visits",
+            "Written notice"
+          ],
+          "help": ""
+        },
+        {
+          "id": "H7",
+          "label": "Is there anything else the planners should know about your household or community’s energy needs?",
+          "type": "text",
+          "options": [],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "I",
+      "title": "Community profile & growth",
+      "instrument": "community",
+      "questions": [
+        {
+          "id": "I_profile",
+          "label": "Community baseline",
+          "type": "fields",
+          "fields": [
+            {
+              "id": "0",
+              "label": "Name and position of informant",
+              "type": "text"
+            },
+            {
+              "id": "1",
+              "label": "Total households / population (latest count)",
+              "type": "text"
+            },
+            {
+              "id": "2",
+              "label": "Number of puroks / sitios; distance between farthest houses (m or km)",
+              "type": "text"
+            },
+            {
+              "id": "3",
+              "label": "Households without any electricity today",
+              "type": "text"
+            },
+            {
+              "id": "4",
+              "label": "Households with legal land tenure (approx. %)",
+              "type": "text"
+            },
+            {
+              "id": "5",
+              "label": "Households expected to be added in 5 and 10 years",
+              "type": "text"
+            },
+            {
+              "id": "6",
+              "label": "Main livelihoods and peak seasons",
+              "type": "text"
+            },
+            {
+              "id": "7",
+              "label": "Road / boat / trail access, travel time to town, fuel delivery",
+              "type": "text"
+            },
+            {
+              "id": "8",
+              "label": "Mobile and internet coverage (none / weak / good)",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "id": "I1",
+          "label": "Is the area currently classified, or known to be under consideration, as unserved or underserved by the DOE, NEA or the electric cooperative?",
+          "type": "select",
+          "options": [
+            "Unserved",
+            "Underserved",
+            "Not classified",
+            "DK"
+          ],
+          "help": "Also record any electrification project or appropriation already planned for the area; these can affect eligibility."
+        },
+        {
+          "id": "I2",
+          "label": "Are there local plans, ordinances or development plans that would change electricity demand (tourism, resettlement, road, port, agri-processing)?",
+          "type": "select",
+          "options": [
+            "Yes:",
+            "No",
+            "DK"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "I3",
+          "label": "Has the community had earlier energy projects (solar, hydro, diesel, mini-grid)? How did they perform and why did they stop, if they did?",
+          "type": "text",
+          "options": [],
+          "help": "Record: ____________"
+        }
+      ]
+    },
+    {
+      "id": "J",
+      "title": "Critical facilities",
+      "instrument": "community",
+      "questions": [
+        {
+          "id": "J_facilities",
+          "label": "Community facility inventory",
+          "type": "table",
+          "rows": [
+            "Barangay hall",
+            "Elementary / high school",
+            "Health station / clinic",
+            "Water system / pumping",
+            "Evacuation center",
+            "Church / mosque / chapel",
+            "Market / cold storage",
+            "Communications tower / radio",
+            "Fish landing / port",
+            "Street or public lighting",
+            "Other"
+          ],
+          "columns": [
+            {
+              "id": "present",
+              "label": "Present (Y/N)",
+              "type": "text"
+            },
+            {
+              "id": "loads",
+              "label": "Main loads",
+              "type": "text"
+            },
+            {
+              "id": "power",
+              "label": "kW or kWh/day (specify unit)",
+              "type": "text"
+            },
+            {
+              "id": "hours",
+              "label": "Must-run hours",
+              "type": "text"
+            },
+            {
+              "id": "backup",
+              "label": "Backup type",
+              "type": "text"
+            },
+            {
+              "id": "notes",
+              "label": "Notes / other name",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "id": "J1",
+          "label": "Which facilities must stay powered during a typhoon or a long outage? Rank the top three.",
+          "type": "text",
+          "options": [],
+          "help": "Record: 1 ________  2 ________  3 ________"
+        },
+        {
+          "id": "J2",
+          "label": "Does the health station store vaccines or medicines that need refrigeration?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No",
+            "No health station"
+          ],
+          "help": ""
+        },
+        {
+          "id": "J3",
+          "label": "Who pays for electricity or fuel for public facilities now, and roughly how much per month? Record: ____________",
+          "type": "text",
+          "options": [],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "K",
+      "title": "Resources, land & environment",
+      "instrument": "community",
+      "questions": [
+        {
+          "id": "K1",
+          "label": "Which local energy resources does the community know about? (select all)",
+          "type": "multi",
+          "options": [
+            "Sunny open areas",
+            "Year-round stream or river with a drop in height",
+            "Consistent strong wind",
+            "Agricultural or wood residues",
+            "Coconut / biomass waste",
+            "Tidal or wave energy",
+            "None known"
+          ],
+          "help": "Follow up with the engineering team; informants describe, they do not measure."
+        },
+        {
+          "id": "K2",
+          "label": "Is there suitable land or roof space for generation and battery equipment, and who owns it?",
+          "type": "select",
+          "options": [
+            "Public land",
+            "Private land",
+            "Ancestral domain",
+            "Church / school land",
+            "Unclear",
+            "None available"
+          ],
+          "help": "Record location and approximate area in the additional details field.",
+          "details": true
+        },
+        {
+          "id": "K3",
+          "label": "Are owners of that land likely to agree to lease or donate it?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Possibly, with terms",
+            "No",
+            "DK"
+          ],
+          "help": ""
+        },
+        {
+          "id": "K4",
+          "label": "Which areas must be avoided when siting equipment? (select all)",
+          "type": "multi",
+          "options": [
+            "Flood-prone or storm-surge area",
+            "Landslide-prone slope",
+            "Mangroves / coastal buffer",
+            "Protected area or watershed",
+            "Farmland in use",
+            "Fishing grounds",
+            "Burial, cultural or religious sites",
+            "Airport / flight path"
+          ],
+          "help": ""
+        },
+        {
+          "id": "K5",
+          "label": "How high does flood or storm surge reach in a severe event? Record: ____ m, last severe event: ____ (year)",
+          "type": "fields",
+          "options": [],
+          "help": "Leave unknown values blank. Zero means none.",
+          "fields": [
+            {
+              "id": "height",
+              "label": "Severe flood / surge height (m)",
+              "type": "number"
+            },
+            {
+              "id": "year",
+              "label": "Last severe event (year)",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "id": "K6",
+          "label": "Where could poles and lines run, and are there difficult crossings (rivers, steep terrain, private lots)?",
+          "type": "text",
+          "options": [],
+          "help": "Record: ____________"
+        },
+        {
+          "id": "K7",
+          "label": "Can heavy equipment (trucks, boats, cranes) reach the likely site?",
+          "type": "select",
+          "options": [
+            "Yes, year-round",
+            "Only in dry season",
+            "Only by small boat or on foot",
+            "DK"
+          ],
+          "help": ""
+        },
+        {
+          "id": "K8",
+          "label": "Is there a place for used batteries and panels to be collected for proper disposal or recycling?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No",
+            "DK"
+          ],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "L",
+      "title": "Governance & consultation",
+      "instrument": "community",
+      "questions": [
+        {
+          "id": "L1",
+          "label": "Is the community organised? (select all)",
+          "type": "multi",
+          "options": [
+            "Barangay Development Council",
+            "Cooperative / association",
+            "Indigenous council / elders",
+            "Women’s group",
+            "Fisherfolk or farmers’ group",
+            "Youth group",
+            "None"
+          ],
+          "help": ""
+        },
+        {
+          "id": "L2",
+          "label": "Who must be consulted, and who must give consent, before a microgrid can be built here? Record: ____________",
+          "type": "text",
+          "options": [],
+          "help": ""
+        },
+        {
+          "id": "L3",
+          "label": "Has the barangay council or municipality passed any resolution about electrification or microgrids?",
+          "type": "select",
+          "options": [
+            "Yes:",
+            "No",
+            "DK"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "L4",
+          "label": "Are there past or current disputes over land, resources or utilities that could affect a project?",
+          "type": "select",
+          "options": [
+            "Yes:",
+            "No",
+            "RTA"
+          ],
+          "help": "",
+          "details": true
+        },
+        {
+          "id": "L5",
+          "label": "Which groups may be missed unless they are contacted separately? (select all)",
+          "type": "multi",
+          "options": [
+            "Women-headed households",
+            "Older adults",
+            "Persons with disability",
+            "Renters and informal settlers",
+            "Indigenous households",
+            "Seasonal residents",
+            "Households far from the centre"
+          ],
+          "help": ""
+        },
+        {
+          "id": "L6",
+          "label": "What local capacity exists to operate and maintain a system?",
+          "type": "select",
+          "options": [
+            "Electricians / technicians in the community",
+            "A cooperative or association with billing experience",
+            "Trained solar or generator operators",
+            "None yet"
+          ],
+          "help": "Also record the number of people with relevant skills in additional details.",
+          "details": true
+        },
+        {
+          "id": "L7",
+          "label": "Would the barangay be willing to help with collections, fault reporting, security of equipment or a local advisory committee?",
+          "type": "select",
+          "options": [
+            "Yes",
+            "Yes, with support",
+            "No"
+          ],
+          "help": ""
+        },
+        {
+          "id": "L8",
+          "label": "What conditions must be met for the community to support a microgrid?",
+          "type": "text",
+          "options": [],
+          "help": ""
+        }
+      ]
+    },
+    {
+      "id": "O",
+      "title": "Site observations",
+      "instrument": "observation",
+      "questions": [
+        {
+          "id": "O_checklist",
+          "label": "Complete once per community at the end of fieldwork",
+          "type": "table",
+          "rows": [
+            "Existing generator, mini-grid or solar array visible; condition noted",
+            "Existing poles or wiring; condition (safe / poor / none)",
+            "Open, unshaded area of at least 1,000 m² near the settlement",
+            "Tall trees or terrain shading the candidate site",
+            "Nearby river or stream with a usable drop in height",
+            "Signs of past flooding or storm damage at candidate site",
+            "Photo of candidate site, main road, and central households taken",
+            "Concentrated loads seen (mill, ice plant, school, clinic, resort)",
+            "Dwellings very far from the settlement centre (line-extension cost)"
+          ],
+          "columns": [
+            {
+              "id": "answer",
+              "label": "Yes / No",
+              "type": "text"
+            },
+            {
+              "id": "notes",
+              "label": "Notes",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

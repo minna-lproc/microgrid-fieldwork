@@ -1,0 +1,400 @@
+Community Energy Needs and Microgrid Design Survey
+Data-gathering instrument for community microgrid planning  |  Draft for pilot testing
+Field
+Entry
+Respondent ID
+Barangay / Sitio / Island
+How to use this instrument
+The survey has two instruments. Use Instrument 1 (Parts A to H) with a sample of households and enterprises. Use Instrument 2 (Parts I to L) with barangay officials, facility heads and community leaders as key informants, one per community. Together they collect the inputs that microgrid design normally needs: a load profile, reliability and resilience expectations, willingness and ability to pay, the energy resources and land available, and the community’s acceptance of and role in the project.
+Consent script
+Good day. We are from the University of the Immaculate Conception. We are studying how electricity is used in your community to help plan a possible microgrid. Taking part is voluntary. You may skip any question or stop at any time, and this will not affect any service or benefit you receive. Your answers will be used only for planning and research, reported in groups, and kept confidential in line with the Data Privacy Act of 2012 (R.A. 10173). No decision has been made about building a microgrid in your community. Do you agree to be interviewed?
+ConsentRespondent agrees to be interviewed
+☐ Yes     ☐ No (end interview)
+Consent-2Respondent agrees that the dwelling location may be recorded by GPS
+☐ Yes     ☐ No
+Instrument 1: Households and Enterprises
+Part A. Respondent and household profile
+A1Sex
+☐ Female     ☐ Male     ☐ Prefer not to say
+A2Age
+☐ 18–24     ☐ 25–34     ☐ 35–49     ☐ 50–64     ☐ 65 and above
+A3Number of household members living here for most of the year: ______ ;
+of whom under 5 years old: ____ ;
+aged 60 and above: ____ ;
+with a disability or a condition that needs electrical equipment: ____
+A4Main source of household income (select main one)
+☐ Farming
+☐ Fishing
+☐ Small business / trading
+☐ Wage work
+☐ Remittances
+☐ Government assistance
+☐ Other: ________
+A5Approximate total household cash income per month
+Optional. Use only ranges; do not ask for exact figures.
+☐ Below ₱2,000
+☐ ₱2,000–₱5,999
+☐ ₱6,000–₱9,999
+☐ ₱10,000–₱19,999
+☐ ₱20,000 and above
+☐ RTA
+A6Is your household a beneficiary of 4Ps or listed in the barangay poverty list?
+☐ Yes     ☐ No     ☐ DK
+A7Does the household belong to an Indigenous Cultural Community / Indigenous People (ICC/IP)?
+Enumerator: if yes, flag the community for free, prior and informed consent (FPIC) processes with the NCIP.
+☐ Yes: ________     ☐ No     ☐ RTA
+A8Do you own or rent the dwelling and the land it stands on?
+☐ Own house and lot     ☐ Own house, land is owned by another / public     ☐ Rent     ☐ Other: ________
+A9How long has your household lived here?
+☐ Less than 2 years     ☐ 2–5 years     ☐ 6–10 years     ☐ More than 10 years
+A10Do you expect the household to still live here in 10 years?
+☐ Yes     ☐ Probably     ☐ Unsure     ☐ No
+Part B. Current energy and electricity supply
+B1What does your household use for lighting and power now? (select all)
+☐ Grid / distribution utility
+☐ Existing mini-grid or diesel plant
+☐ Solar home system / solar lamps
+☐ Own diesel or gasoline generator
+☐ Shared or neighbour’s connection
+☐ Batteries / charging service
+☐ Kerosene, candles or firewood
+☐ None
+B2On average, how many hours a day do you have electricity?
+☐ None
+☐ Under 4 hours
+☐ 4–7 hours
+☐ 8–12 hours
+☐ 13–23 hours
+☐ 24 hours
+B3At what times is electricity available? (select all)
+☐ Early morning (4–6 AM)
+☐ Morning (6 AM–12 NN)
+☐ Afternoon (12 NN–6 PM)
+☐ Evening (6–10 PM)
+☐ Late night (10 PM–4 AM)
+B4How long have you had this supply arrangement?
+☐ Under 1 year     ☐ 1–3 years     ☐ 4–10 years     ☐ More than 10 years
+B5In the last 30 days, how many unplanned power interruptions did you experience, and how long did the longest last? Interruptions: ____ ; longest: ____ hours
+B6What was the effect of the last long interruption? (select all)
+☐ Spoiled food or stock
+☐ Lost income
+☐ Children could not study
+☐ Medical or safety problem
+☐ Could not charge phones / communicate
+☐ Little effect
+B7How much does your household spend in a typical month on each? (₱, write 0 if none)
+Electricity bills: ____  Diesel/gasoline for generator: ____  Kerosene/candles: ____  Battery charging: ____  LPG/firewood for cooking: ____
+B8How satisfied are you with your present supply?
+☐ Very satisfied     ☐ Satisfied     ☐ Neutral     ☐ Dissatisfied     ☐ Very dissatisfied
+B9What is the biggest problem with your present supply?
+Part C. Appliances and electricity demand
+Ask the respondent to name every electrical item used in the household. Record what is used now, and what the household expects to add within three years. Wattage may be read from the label; leave blank if not visible.
+Item
+Now (qty)
+Watts
+Hours per day
+Main time of use (M / A / E / N)
+Planned in 3 yrs (qty)
+Lights (LED / CFL / other)
+Phone charger
+Television
+Electric fan
+Refrigerator / freezer
+Rice cooker / electric stove
+Washing machine
+Water pump
+Radio / sound system
+Computer / laptop / router
+Air conditioner
+Electric vehicle / e-bike charging
+Other: ________
+M = morning, A = afternoon, E = evening, N = night.
+C1Which appliance would you buy first if reliable electricity were available all day?
+Record: ____________
+C2Do you cook with electricity or plan to?
+☐ Yes, now     ☐ Yes, if supply and price allow     ☐ No
+C3Does anyone in the household depend on electrical medical equipment or refrigerated medicine?
+Priority-load indicator only; do not record the condition.
+☐ Yes     ☐ No     ☐ RTA
+Part D. Productive and commercial use
+D1Does anyone in the household run a business or income activity that uses, or could use, electricity?
+☐ Yes     ☐ No (skip to Part E)
+D2Type of activity (select all)
+☐ Sari-sari store
+☐ Food processing / eatery
+☐ Ice or cold storage
+☐ Fish or crop processing
+☐ Rice, corn or coconut mill
+☐ Welding / carpentry / repair
+☐ Sewing / weaving
+☐ Water refilling / irrigation pump
+☐ Internet / charging / laundry service
+☐ Tourism accommodation
+☐ Other: ________
+Equipment
+Qty
+Watts / hp
+Hours per day
+Months in use (peak season)
+Uses fuel now? (L/month)
+1.
+2.
+3.
+D3If electricity were reliable, would you expand or start an activity?
+☐ Yes: what and when? ________     ☐ No     ☐ Unsure
+D4Is your business seasonal?
+☐ Year-round     ☐ Seasonal: peak months ________
+Part E. Reliability and service expectations
+E1What is the minimum daily supply that would meet your needs?
+☐ 8 hours     ☐ 12 hours     ☐ 18 hours     ☐ 24 hours
+E2How long an interruption could your household tolerate before it causes serious trouble?
+☐ Under 1 hour     ☐ 1–4 hours     ☐ 4–12 hours     ☐ More than 12 hours
+E3During typhoons or floods, what would you want the system to do?
+☐ Keep only essential facilities powered
+☐ Keep the whole community powered if possible
+☐ Shut down safely and restore quickly
+☐ DK
+E4Which hazards have damaged homes or utilities here in the last 10 years? (select all possible answers)
+☐ Typhoon / strong wind
+☐ Flood
+☐ Storm surge
+☐ Landslide
+☐ Fire
+☐ Earthquake
+☐ Drought
+☐ None
+E5Would you accept short planned shutdowns for maintenance if given advance notice?
+☐ Yes     ☐ Yes, if under 4 hours     ☐ No
+Part F. Affordability and willingness to pay
+F1Would your household connect to a new 24-hour community microgrid if it were offered?
+☐ Yes     ☐ Yes, depending on price     ☐ Not sure     ☐ No: reason ________
+F2Considering everything you now spend on energy (B7), what is the most your household could pay per month for reliable electricity?
+☐ Below ₱300
+☐ ₱300–₱599
+☐ ₱600–₱999
+☐ ₱1,000–₱1,499
+☐ ₱1,500–₱1,999
+☐ ₱2,000 and above
+☐ DK
+F3Which arrangement would you prefer for paying for electricity?
+☐ Prepaid load by mobile wallet or agent
+☐ Prepaid at a local store
+☐ Monthly bill
+☐ Payment after harvest / catch season
+☐ Pay per use with a small fixed fee
+F4How would you prefer to cover a one-time connection cost (wiring, meter, service drop)?
+☐ Pay upfront if less than ₱____
+☐ Instalments added to the bill
+☐ Work contribution to the project
+☐ Would need it fully subsidised
+☐ DK
+F5Is anyone in the household unable to pay the current cost of energy without cutting back on food or other needs?
+☐ Often     ☐ Sometimes     ☐ Rarely     ☐ Never     ☐ RTA
+F6Do you know of any subsidy or lifeline rate for low-income electricity users?
+☐ Yes: ________     ☐ No
+F7How much would you need to save per month, compared with what you spend now, to switch to a microgrid?
+☐ Any saving     ☐ 10–19%     ☐ 20–39%     ☐ 40% or more     ☐ I would pay more for better service
+Part G. Metering, customer service and protection
+G1What kind of metering would you prefer?
+☐ Individual prepaid meter
+☐ Individual postpaid meter
+☐ Shared meter with neighbours
+☐ Flat monthly fee with a load limit
+G2Where would you want to report a problem or complaint? (select all)
+☐ Barangay office
+☐ Local technician in the community
+☐ Mobile phone / SMS / chat
+☐ Office in the municipality
+☐ Community association
+G3How fast should a fault be repaired?
+☐ Within 4 hours     ☐ Within 24 hours     ☐ Within 3 days     ☐ Longer is acceptable if the price is lower
+G4What information would you want to receive about the service? (select all)
+☐ Tariff and how it is computed
+☐ Planned interruptions
+☐ Monthly consumption
+☐ Safety reminders
+☐ How to complain
+☐ How the operator uses the money collected
+G5Are you worried about any of these? (select all)
+☐ Being disconnected if unable to pay
+☐ Prices rising later
+☐ Meter accuracy
+☐ Safety of wiring or equipment
+☐ Data privacy of usage records
+☐ Service ending when the operator leaves
+☐ None
+Part H. Awareness, acceptance and participation
+H1Have you heard about microgrids or solar-and-battery community power?
+☐ Yes, I know what it is     ☐ Heard the word only     ☐ No
+H2Overall, how do you feel about a microgrid being built for your community?
+☐ Strongly support     ☐ Support     ☐ Neutral / need more information     ☐ Oppose     ☐ Strongly oppose
+H3What are your main concerns? (select all)
+☐ Cost
+☐ Reliability
+☐ Land or house relocation
+☐ Effect on fishing grounds, farms or forest
+☐ Noise or smoke
+☐ Who owns and controls it
+☐ Jobs going to outsiders
+☐ Losing existing service
+☐ None
+H4Who would you trust most to run the system?
+☐ Private company
+☐ Electric cooperative
+☐ Local government
+☐ Community-owned association
+☐ Combination: ________
+☐ DK
+H5Would a member of your household want to work on the system (operation, meter reading, payments, cleaning panels)?
+☐ Yes     ☐ Maybe with training     ☐ No
+H6How do you prefer to receive news and take part in decisions? (select all)
+☐ Barangay assembly
+☐ Purok / sitio meeting
+☐ Church or school gathering
+☐ Radio
+☐ Facebook / messaging group
+☐ House visits
+☐ Written notice
+H7Is there anything else the planners should know about your household or community’s energy needs?
+Instrument 2: Community Key Informants
+Interview the barangay captain or a designated official, and separately the head of each community facility. Use records where available (barangay profile, school and health-station inventories, hazard maps).
+Part I. Community profile and growth
+Item
+Entry
+Name and position of informant
+Total households / population (latest count)
+Number of puroks or sitios; distance between farthest houses (m or km)
+Households without any electricity today
+Households in the area with legal land tenure (approx. %)
+Households expected to be added in 5 and 10 years
+Main livelihoods and their peak seasons
+Access: road, boat or trail; travel time to nearest town; how fuel is delivered
+Mobile phone and internet coverage (none / weak / good)
+I1Is the area currently classified, or known to be under consideration, as unserved or underserved by the DOE, NEA or the electric cooperative?
+Also record any electrification project or appropriation already planned for the area; these can affect eligibility.
+☐ Unserved     ☐ Underserved     ☐ Not classified     ☐ DK
+I2Are there local plans, ordinances or development plans that would change electricity demand (tourism, resettlement, road, port, agri-processing)?
+☐ Yes: ________     ☐ No     ☐ DK
+I3Has the community had earlier energy projects (solar, hydro, diesel, mini-grid)? How did they perform and why did they stop, if they did?
+Record: ____________
+Part J. Community and critical facilities
+Complete one row per facility. Record the hours that supply is essential, not only the hours the facility is open.
+Facility
+Present? (Y/N)
+Main electrical loads
+Approx. kW or kWh/day
+Must-run hours
+Backup now (type)
+Barangay hall
+Elementary / high school
+Health station / clinic
+Water system / pumping
+Evacuation center
+Church / mosque / chapel
+Market / cold storage
+Communications tower / radio
+Fish landing / port
+Street or public lighting
+Other: ________
+J1Which facilities must stay powered during a typhoon or a long outage? Rank the top three.
+Record: 1 ________  2 ________  3 ________
+J2Does the health station store vaccines or medicines that need refrigeration?
+☐ Yes     ☐ No     ☐ No health station
+J3Who pays for electricity or fuel for public facilities now, and roughly how much per month? Record: ____________
+Part K. Resources, land and environment
+K1Which local energy resources does the community know about? (select all)
+Follow up with the engineering team; informants describe, they do not measure.
+☐ Sunny open areas
+☐ Year-round stream or river with a drop in height
+☐ Consistent strong wind
+☐ Agricultural or wood residues
+☐ Coconut / biomass waste
+☐ Tidal or wave energy
+☐ None known
+K2Is there suitable land or roof space for generation and battery equipment, and who owns it?
+Record the location and approximate area: ____________
+☐ Public land
+☐ Private land
+☐ Ancestral domain
+☐ Church / school land
+☐ Unclear
+☐ None available
+K3Are owners of that land likely to agree to lease or donate it?
+☐ Yes     ☐ Possibly, with terms     ☐ No     ☐ DK
+K4Which areas must be avoided when siting equipment? (select all)
+☐ Flood-prone or storm-surge area
+☐ Landslide-prone slope
+☐ Mangroves / coastal buffer
+☐ Protected area or watershed
+☐ Farmland in use
+☐ Fishing grounds
+☐ Burial, cultural or religious sites
+☐ Airport / flight path
+K5How high does flood or storm surge reach in a severe event? Record: ____ m, last severe event: ____ (year)
+K6Where could poles and lines run, and are there difficult crossings (rivers, steep terrain, private lots)?
+Record: ____________
+K7Can heavy equipment (trucks, boats, cranes) reach the likely site?
+☐ Yes, year-round     ☐ Only in dry season     ☐ Only by small boat or on foot     ☐ DK
+K8Is there a place for used batteries and panels to be collected for proper disposal or recycling?
+☐ Yes     ☐ No     ☐ DK
+Part L. Governance, consultation and acceptance
+L1Is the community organised? (select all)
+☐ Barangay Development Council
+☐ Cooperative / association
+☐ Indigenous council / elders
+☐ Women’s group
+☐ Fisherfolk or farmers’ group
+☐ Youth group
+☐ None
+L2Who must be consulted, and who must give consent, before a microgrid can be built here? Record: ____________
+L3Has the barangay council or municipality passed any resolution about electrification or microgrids?
+☐ Yes: ________     ☐ No     ☐ DK
+L4Are there past or current disputes over land, resources or utilities that could affect a project?
+☐ Yes: ________     ☐ No     ☐ RTA
+L5Which groups may be missed unless they are contacted separately? (select all)
+☐ Women-headed households
+☐ Older adults
+☐ Persons with disability
+☐ Renters and informal settlers
+☐ Indigenous households
+☐ Seasonal residents
+☐ Households far from the centre
+L6What local capacity exists to operate and maintain a system?
+Record the number of people with relevant skills: ____
+☐ Electricians / technicians in the community
+☐ A cooperative or association with billing experience
+☐ Trained solar or generator operators
+☐ None yet
+L7Would the barangay be willing to help with collections, fault reporting, security of equipment or a local advisory committee?
+☐ Yes     ☐ Yes, with support     ☐ No
+L8What conditions must be met for the community to support a microgrid?
+Enumerator Site Observation Checklist
+Complete for each community once, at the end of fieldwork.
+Observation
+Yes / No
+Notes
+Existing generator, mini-grid or solar array visible; condition noted
+Existing poles or wiring; condition (safe / poor / none)
+Open, unshaded area of at least 1,000 m² near the settlement
+Tall trees or terrain shading the candidate site
+Nearby river or stream with a usable drop in height
+Signs of past flooding or storm damage at candidate site
+Photo of candidate site, main road, and central households taken
+Concentrated loads seen (mill, ice plant, school, clinic, resort)
+Dwellings very far from the settlement centre (line-extension cost)
+Notes for the Project Team
+Why each part is there
+Part
+Design input it provides
+A, B
+Baseline of customers, existing supply and current energy spending. Gives the fuel and cost savings against which a microgrid is judged.
+C, D
+Load profile by hour and season, plus expected growth, for sizing generation and storage. Sizing depends on both geographic conditions and load demand.
+E, J
+Reliability and resilience targets, critical loads and hazards. The planning stage asks what level of uptime is needed, which operations must stay on, and which can tolerate instability.
+F, G
+Affordability, payment mode and customer-service design. Tariff, subsidy and service standards for unserved and underserved areas are determined through the regulatory process.
+H, L
+Social acceptance, governance, FPIC and local operation and maintenance capacity. These matter for the operator and for community consent.
+I, K
+Community size, layout, access, land and natural resources, used for siting and network layout.
