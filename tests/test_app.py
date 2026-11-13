@@ -19,7 +19,7 @@ def login(c,user='field'):
 
 def survey(**kw):
  t=datetime.now(timezone.utc).isoformat()
- return dict(id=str(uuid.uuid4()),version=SCHEMA['version'],instrument='household',community='Bucana',respondent='BUC-001',consent='Yes',gps_consent='No',location=None,answers={'A1':'Female','D1':'No (skip to Part E)'},started_at=t,completed_at=t,**kw)
+ return dict(id=str(uuid.uuid4()),version=SCHEMA['version'],instrument='household',community='Bucana',respondent='BUC-001',consent='Yes',gps_consent='No',location=None,answers={'A1':'Female','D1':'No (skip to Part E)'},metadata={'municipality_province':'Davao / Davao del Sur','language':'Cebuano'},photo_consent='No',audio_consent='No',started_at=t,completed_at=t,**kw)
 
 def test_role_access_and_csrf(env):
  app,c=env

@@ -1,0 +1,20 @@
+Based on GitHub commit 2aa8591271a3364a03223731f62e58dd42d122d8
+Copy/stage ALL the following files, including the new legacy schema and codebooks:
+
+.github/workflows/deploy-pythonanywhere.yml
+README.md
+REVISED-SURVEY-UPGRADE.md
+app.py
+scripts/generate_codebook.py
+static/app.js
+static/codebook.csv
+static/codebook.json
+static/style.css
+static/survey-legacy.json
+static/survey.json
+static/sw.js
+survey-source.txt
+tests/browser_revised.py
+tests/browser_smoke.py
+tests/test_app.py
+tests/test_revised_survey.py

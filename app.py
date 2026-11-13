@@ -9,7 +9,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE = Path(__file__).parent
 SCHEMA = json.loads((BASE / 'static/survey.json').read_text())
-QUESTIONS = {q['id']: q for s in SCHEMA['sections'] for q in s['questions']}
+LEGACY_SCHEMA = json.loads((BASE / 'static/survey-legacy.json').read_text())
+SCHEMAS = {x['version']:x for x in [LEGACY_SCHEMA,SCHEMA]}
+QUESTIONS = {q['id']: q for schema in SCHEMAS.values() for section in schema['sections'] for q in section['questions']}
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
@@ -44,7 +46,23 @@ def create_app(test_config=None):
         CREATE INDEX IF NOT EXISTS surveys_user ON surveys(user_id);
         CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS survey_locations(survey_id TEXT PRIMARY KEY REFERENCES surveys(id) ON DELETE CASCADE, coordinates TEXT NOT NULL);
         ''')
+        columns={row['name'] for row in db().execute('PRAGMA table_info(surveys)')}
+        for name,definition in [('metadata',"TEXT NOT NULL DEFAULT '{}'"),('photo_consent',"TEXT NOT NULL DEFAULT 'Not asked'"),('audio_consent',"TEXT NOT NULL DEFAULT 'Not asked'")]:
+            if name not in columns: db().execute('ALTER TABLE surveys ADD COLUMN '+name+' '+definition)
+        # Additive, repeatable migration: move legacy dwelling GPS out of answer rows.
+        for row in db().execute("SELECT id,location FROM surveys WHERE location IS NOT NULL AND location NOT IN ('null','')").fetchall():
+            db().execute('INSERT OR IGNORE INTO survey_locations VALUES(?,?)',(row['id'],row['location']))
+            db().execute("UPDATE surveys SET location='null' WHERE id=?",(row['id'],))
+        db().commit()
+    def survey_record(row):
+        result=dict(row); result['answers']=json.loads(result['answers']);result['metadata']=json.loads(result['metadata'])
+        loc=db().execute('SELECT coordinates FROM survey_locations WHERE survey_id=?',(result['id'],)).fetchone()
+        loc=json.loads(loc['coordinates']) if loc else None
+        result.pop('location',None);result['has_location']=bool(loc)
+        result['coarse_location']={'lat':round(loc['lat'],2),'lng':round(loc['lng'],2),'precision':'0.01 degree grid; approximate, not dwelling GPS'} if loc else None
+        return result
     def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target']}
     def login_required(role=None):
         def decorate(fn):
@@ -117,20 +135,27 @@ def create_app(test_config=None):
             db().rollback()
             if existing['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
             return jsonify(ok=True,id=clean['id'],duplicate=True)
-        db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],json.dumps(clean.get('location')),json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),SCHEMA['version']))
+        db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],'null',json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),clean['version']))
+        db().execute('UPDATE surveys SET metadata=?,photo_consent=?,audio_consent=? WHERE id=?',(json.dumps(clean.get('metadata',{})),clean.get('photo_consent','Not asked'),clean.get('audio_consent','Not asked'),clean['id']))
+        if clean.get('location'): db().execute('INSERT INTO survey_locations VALUES(?,?)',(clean['id'],json.dumps(clean['location'])))
         db().execute('UPDATE users SET last_seen=? WHERE id=?',(now(),g.user['id'])); db().commit()
         return jsonify(ok=True,id=clean['id']),201
     @app.get('/api/my-surveys')
     @login_required()
-    def my_surveys(): return jsonify(surveys=[dict(r) for r in db().execute('SELECT id,instrument,community,respondent,completed_at,review FROM surveys WHERE user_id=? ORDER BY received_at DESC LIMIT 200',(g.user['id'],))])
+    def my_surveys(): return jsonify(surveys=[dict(r) for r in db().execute('SELECT id,instrument,community,respondent,completed_at,review,version FROM surveys WHERE user_id=? ORDER BY received_at DESC LIMIT 200',(g.user['id'],))])
     @app.get('/api/dashboard')
     @login_required('admin')
     def dashboard():
         users=[dict(r) for r in db().execute("SELECT id,name,username,community,target,active,last_seen,location,(SELECT count(*) FROM surveys WHERE user_id=users.id AND consent='Yes') AS completed FROM users WHERE role='enumerator' ORDER BY name")]
-        surveys=[dict(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
-        for s in surveys: s['answers']=json.loads(s['answers']); s['location']=json.loads(s['location'])
+        surveys=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
         for u in users: u['location']=json.loads(u['location']) if u['location'] else None
         return jsonify(users=users,surveys=surveys,server_time=now())
+    @app.get('/api/surveys/<sid>/location')
+    @login_required('admin')
+    def precise_location(sid):
+        record=db().execute('SELECT coordinates FROM survey_locations WHERE survey_id=?',(sid,)).fetchone()
+        if not record: return jsonify(error='No consented GPS location recorded.'),404
+        return jsonify(location=json.loads(record['coordinates']))
     @app.post('/api/users')
     @login_required('admin')
     def add_user():
@@ -185,12 +210,16 @@ def create_app(test_config=None):
     @app.get('/api/export')
     @login_required('admin')
     def export():
-        rows=[dict(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
-        if request.args.get('format')=='json': return Response(json.dumps(dict(schema=SCHEMA,surveys=rows),ensure_ascii=False),mimetype='application/json',headers={'Content-Disposition':'attachment; filename=microgrid-surveys.json'})
-        out=io.StringIO(); cols=['id','enumerator','instrument','community','respondent','consent','gps_consent','location','started_at','completed_at','received_at','review']+list(QUESTIONS)
+        rows=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
+        if request.args.get('format')=='json': return Response(json.dumps(dict(schema=SCHEMA,schemas=SCHEMAS,location_policy='Approximate locations only; exact GPS is restricted and stored separately.',surveys=rows),ensure_ascii=False),mimetype='application/json',headers={'Content-Disposition':'attachment; filename=microgrid-surveys.json'})
+        out=io.StringIO(); cols=['id','enumerator','instrument','version','community','respondent','consent','gps_consent','photo_consent','audio_consent','metadata','coarse_location','started_at','completed_at','received_at','review']+list(QUESTIONS)
         w=csv.DictWriter(out,fieldnames=cols); w.writeheader()
         for row in rows:
-            answers=json.loads(row['answers']); cells={k:row.get(k,answers.get(k,'')) for k in cols}
+            cells={k:row.get(k,row['answers'].get(k,'')) for k in cols}
+            # Preserve free-text follow-ups as well as each structured answer.
+            for key in QUESTIONS:
+                if row['answers'].get(key+'_details'):
+                    cells[key]=dict(answer=row['answers'].get(key),additional_details=row['answers'][key+'_details'])
             for k,v in cells.items():
                 if isinstance(v,(dict,list)): v=json.dumps(v,ensure_ascii=False)
                 if isinstance(v,str) and v.lstrip().startswith(('=','+','-','@','\t','\r')): v="'"+v
@@ -219,7 +248,9 @@ def valid_location(v):
 def validate_survey(d):
     if not isinstance(d,dict): raise ValueError('Invalid survey')
     if str(uuid.UUID(str(d.get('id'))))!=d['id']: raise ValueError('Invalid survey ID')
-    if d.get('version')!=SCHEMA['version']: raise ValueError('Survey version changed. Reopen the app before starting a new interview.')
+    if d.get('version') not in SCHEMAS: raise ValueError('Unknown survey version. Keep this interview and contact the coordinator.')
+    selected_schema=SCHEMAS[d['version']]
+    revised=d['version']==SCHEMA['version']
     if d.get('instrument') not in ('household','community','observation'): raise ValueError('Invalid instrument')
     for f in ['community','respondent']:
         if not isinstance(d.get(f),str) or not d[f].strip() or len(d[f])>150: raise ValueError('Community and respondent / observation IDs are required.')
@@ -229,11 +260,13 @@ def validate_survey(d):
     if d.get('location') and (d['gps_consent']!='Yes' or d['consent']!='Yes' or not valid_location(d['location'])): raise ValueError('Location requires separate consent and valid coordinates.')
     answers=d.get('answers')
     if not isinstance(answers,dict) or len(json.dumps(answers))>500000: raise ValueError('Invalid survey answers')
-    allowed={q['id']:q for s in SCHEMA['sections'] if s['instrument']==d['instrument'] for q in s['questions']}
-    if d['consent']=='No': d['answers']={}; d['location']=None
+    allowed={q['id']:q for s in selected_schema['sections'] if s['instrument']==d['instrument'] for q in s['questions']}
+    if d['consent']=='No':
+        d['answers']={}; d['location']=None; d['metadata']={};d['photo_consent']='Not asked';d['audio_consent']='Not asked'
     else:
         if answers.get('D1','').startswith('No'):
-            for k in ['D2','D_equipment','D3','D4','D2_details','D3_details','D4_details']: answers.pop(k,None)
+            for k in list(answers):
+                if k.startswith('D') and k!='D1': answers.pop(k,None)
         for key,value in answers.items():
             if key.endswith('_details') and key[:-8] in allowed:
                 if not isinstance(value,str) or len(value)>5000: raise ValueError('Invalid additional details')
@@ -241,6 +274,21 @@ def validate_survey(d):
             q=allowed.get(key)
             if not q: raise ValueError('Unrecognized question '+key)
             validate_answer(q,value)
+        if revised:
+            for name in ['photo_consent','audio_consent']:
+                if d.get(name) not in ['Yes','No']: raise ValueError('Record separate photo and audio consent choices.')
+            meta=d.get('metadata')
+            if not isinstance(meta,dict): raise ValueError('Interview metadata is required.')
+            allowed_meta={'municipality_province','language','sampling_frame','selection_method','target_sample','replacement','replacement_reason','field_notes'}
+            if any(k not in allowed_meta or not isinstance(v,str) or len(v)>5000 for k,v in meta.items()): raise ValueError('Invalid interview metadata.')
+            if not all(meta.get(k,'').strip() for k in ['municipality_province','language']): raise ValueError('Record municipality/province and interview language.')
+            if meta.get('replacement')=='Yes' and not meta.get('replacement_reason','').strip(): raise ValueError('Record the reason for replacing a selected household.')
+            if meta.get('replacement','') not in ['','Yes','No']: raise ValueError('Invalid replacement choice.')
+            if answers.get('O_checklist') and d.get('photo_consent')!='Yes' and len(answers['O_checklist'])>6 and answers['O_checklist'][6].get('answer')=='Yes': raise ValueError('Photos taken must have separate photo consent.')
+        else:
+            d['metadata']={};d['photo_consent']='Not asked';d['audio_consent']='Not asked'
+        b=answers.get('B5',{})
+        if isinstance(b,dict) and b.get('total') not in ('',None) and b.get('longest') not in ('',None) and float(b['longest'])>float(b['total']): raise ValueError('B5: longest interruption cannot exceed total hours without electricity.')
         a=answers.get('A3',{})
         if isinstance(a,dict) and a.get('members') not in ('',None):
             for k in ['under5','over60','equipment']:
@@ -265,19 +313,33 @@ def validate_answer(q,v):
     elif q['type']=='fields':
         if not isinstance(v,dict) or any(k not in {f['id'] for f in q['fields']} for k in v): raise ValueError(q['id']+': invalid fields')
         for f in q['fields']: validate_cell(q['id'],f,v.get(f['id'],''))
+    elif q['type']=='repeat_table':
+        if not isinstance(v,list) or len(v)>q.get('max_groups',50): raise ValueError(q['id']+': invalid facility inventories')
+        for group in v:
+            if not isinstance(group,dict) or set(group)-{'name','rows'} or not isinstance(group.get('name'),str) or not group['name'].strip() or len(group['name'])>150: raise ValueError('Name each facility inventory.')
+            validate_answer(dict(q,type='table'),group.get('rows',[]))
     elif q['type']=='table':
         if not isinstance(v,list) or len(v)>len(q['rows']): raise ValueError(q['id']+': invalid table')
         for row in v:
             if not isinstance(row,dict) or any(k not in {c['id'] for c in q['columns']} for k in row): raise ValueError(q['id']+': invalid row')
             for c in q['columns']: validate_cell(q['id'],c,row.get(c['id'],''))
+        if q['id']=='F10':
+            for index,row in enumerate(v):
+                if row.get('response') and not row.get('terms','').strip(): raise ValueError('F10: record the project-team scenario before the response.')
+                if index and row.get('kwh') not in ('',None): raise ValueError('F10: the first-kWh threshold belongs to the lifeline row only.')
 
 def validate_cell(qid,f,v):
     if v in ('',None): return
+    if f['type']=='select':
+        if v not in f['options']: raise ValueError(qid+': invalid '+f['label'])
+        return
     if f['type']=='number':
         try:
             n=float(v)
             if not 0<=n<=1e12: raise ValueError()
-            if f['id']=='hours' and n>24: raise ValueError()
+            if f['id']=='hours' and f['type']=='number' and n>24: raise ValueError()
+            if 'max' in f and n>f['max']: raise ValueError()
+            if f.get('integer') and n!=int(n): raise ValueError()
             if qid=='A3' and n!=int(n): raise ValueError()
             if f['id'] in ['qty','planned','interruptions'] and n!=int(n): raise ValueError()
         except (ValueError,TypeError,OverflowError): raise ValueError(qid+': enter valid non-negative quantities (hours/day ≤ 24).')
@@ -296,7 +358,7 @@ def demo_seed(db):
         for j in range(count):
             dt=(datetime.now(timezone.utc)-timedelta(days=j%7,hours=i,minutes=15*j)).isoformat(); typ='community' if j==0 else 'household'
             answers={'H2':['Support','Strongly support','Neutral / need more information'][j%3],'B2':['24 hours','8–12 hours','4–7 hours'][j%3],'F2':['₱300–₱599','₱600–₱999','₱1,000–₱1,499'][j%3]} if typ=='household' else {'I1':'Underserved'}
-            db.execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version,review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),uid,typ,community,f'DEMO-{i+1:02}-{j+1:03}','Yes','No','null',json.dumps(answers),dt,dt,dt,SCHEMA['version'],'flagged' if j==3 else 'verified' if j>3 else 'pending'))
+            db.execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version,review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),uid,typ,community,f'DEMO-{i+1:02}-{j+1:03}','Yes','No','null',json.dumps(answers),dt,dt,dt,LEGACY_SCHEMA['version'],'flagged' if j==3 else 'verified' if j>3 else 'pending'))
     db.commit()
 
 if __name__=='__main__': create_app().run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=False)

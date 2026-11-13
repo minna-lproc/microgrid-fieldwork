@@ -1,3 +1,20 @@
+# Gridfield — revised community microgrid survey
+
+Flask + SQLite offline PWA for household/enterprise interviews, community key informants and site observations, updated to `Microgrid_Community_Survey_REVISED.docx`.
+
+**Read [REVISED-SURVEY-UPGRADE.md](REVISED-SURVEY-UPGRADE.md) before upgrading an existing installation.** It documents the new questions, four consent choices, version-safe offline drafts/sync, automatic database/GPS migration, reporting, exports and deployment steps.
+
+- Current questionnaire: `static/survey.json` (`2026-revised-2`).
+- Earlier questionnaire: `static/survey-legacy.json` (`2026-pilot-1`), retained for historical records and queued interviews.
+- Source document text: `survey-source.txt`.
+- Codebook: `static/codebook.json` and `static/codebook.csv`; regenerate with `python scripts/generate_codebook.py` after edits. CI checks that it matches the questionnaire.
+- Run a fresh local demo: `./run-demo.sh` on Linux/macOS, or `run-demo.bat` on Windows. The seeded demo records intentionally use the earlier questionnaire; new collection uses the revision.
+- Production: existing PythonAnywhere WSGI configuration, accounts, persistent database and HTTPS remain in use. Do not run demo seeding against production.
+
+The original installation reference follows. Where it describes the older questionnaire or version-mismatch behavior, the upgrade guide above takes precedence: supported earlier versions remain accepted, exact respondent GPS is excluded from standard exports, and media consent does not provide media capture/upload.
+
+---
+
 # Gridfield — Community energy fieldwork
 
 A Flask + SQLite progressive web app based on **Microgrid_Community_Survey (1) (1).docx**, the University of the Immaculate Conception community energy and microgrid planning instrument. The document is treated as questionnaire content, not as instructions governing application development.

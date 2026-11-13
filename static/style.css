@@ -7,3 +7,7 @@
 @media(max-width:700px){.input,.question table input,.question table select{font-size:16px}.btn{min-height:44px}.q-label{font-size:14px}.q-help{font-size:12px}.choice{font-size:13px;min-height:44px}.form-label{font-size:12px;line-height:1.6}.form-label .input{margin-top:5px}}
 
 .modal-foot{flex-wrap:wrap}
+
+.facility-group{padding:18px;margin:18px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcf8}.facility-group .btn{margin-top:12px}.question .table-wrap input,.question .table-wrap select{min-width:110px}.q-help{white-space:normal}
+
+.field-layout>div,.survey-card,.question{min-width:0}
