@@ -1,5 +1,5 @@
 """Community microgrid survey. Flask API + installable, offline-first client."""
-import csv, io, json, os, re, secrets, sqlite3, time, uuid
+import base64, binascii, csv, io, json, os, re, secrets, sqlite3, time, uuid
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
@@ -16,12 +16,14 @@ QUESTIONS = {q['id']: q for schema in SCHEMAS.values() for section in schema['se
 REFERENCE_CODES = {'household':'HE','community':'CI','observation':'SO'}
 REFERENCE_BLOCK_SIZE = 100
 MAX_REFERENCE_SEQUENCE = 9007199254740991
+MAX_PHOTO_BYTES = 320 * 1024
+MAX_INTERVIEW_PHOTO_BYTES = 4 * 1024 * 1024
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
 def create_app(test_config=None):
     app = Flask(__name__, static_folder='static')
-    app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY'), DATABASE=os.environ.get('DATABASE', str(BASE/'instance/survey.sqlite')), MAX_CONTENT_LENGTH=1024*1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE')=='1', PERMANENT_SESSION_LIFETIME=timedelta(days=7), DEMO=os.environ.get('DEMO')=='1')
+    app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY'), DATABASE=os.environ.get('DATABASE', str(BASE/'instance/survey.sqlite')), MAX_CONTENT_LENGTH=6*1024*1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE')=='1', PERMANENT_SESSION_LIFETIME=timedelta(days=7), DEMO=os.environ.get('DEMO')=='1')
     if test_config: app.config.update(test_config)
     Path(app.config['DATABASE']).parent.mkdir(parents=True, exist_ok=True)
     if not app.config['SECRET_KEY']:
@@ -47,6 +49,7 @@ def create_app(test_config=None):
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','enumerator')), community TEXT DEFAULT '', target INTEGER DEFAULT 30, active INTEGER DEFAULT 1, last_seen TEXT, location TEXT);
         CREATE TABLE IF NOT EXISTS surveys(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), instrument TEXT NOT NULL, community TEXT NOT NULL, respondent TEXT NOT NULL, consent TEXT NOT NULL, gps_consent TEXT, location TEXT, answers TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT NOT NULL, received_at TEXT NOT NULL, version TEXT NOT NULL, review TEXT DEFAULT 'pending');
+        CREATE TABLE IF NOT EXISTS survey_photos(survey_id TEXT NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,id TEXT NOT NULL,mime TEXT NOT NULL,image BLOB NOT NULL,PRIMARY KEY(survey_id,id));
         CREATE INDEX IF NOT EXISTS surveys_user ON surveys(user_id);
         CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
@@ -100,6 +103,9 @@ def create_app(test_config=None):
         r.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
         if request.path.startswith('/api/'): r.headers['Cache-Control']='no-store'
         return r
+    @app.errorhandler(413)
+    def too_large(error):
+        return jsonify(error='Interview upload exceeds 6 MiB. Reduce equipment photos and retry; your local interview is retained.'),413
     @app.get('/')
     def index(): return send_from_directory(BASE/'templates','index.html')
     @app.get('/sw.js')
@@ -181,6 +187,7 @@ def create_app(test_config=None):
         data=request.get_json(silent=True)
         try: clean=validate_survey(data)
         except (ValueError,TypeError,KeyError) as e: return jsonify(error=str(e)),400
+        photos=clean.pop('_survey_photos',[])
         # Serialize deletion and sync so a delayed offline retry cannot restore a deleted interview.
         db().execute('BEGIN IMMEDIATE')
         deleted=db().execute('SELECT user_id FROM survey_deletions WHERE id=?',(clean['id'],)).fetchone()
@@ -230,8 +237,17 @@ def create_app(test_config=None):
         db().execute('UPDATE surveys SET metadata=?,photo_consent=?,audio_consent=? WHERE id=?',(json.dumps(clean.get('metadata',{})),clean.get('photo_consent','Not asked'),clean.get('audio_consent','Not asked'),clean['id']))
         if mode=='allocated-v1': db().execute('UPDATE surveys SET reference_mode=?,reference_allocation_id=?,reference_sequence=?,assignment_version=? WHERE id=?',(mode,allocation['id'],sequence,clean['assignment_version'],clean['id']))
         if clean.get('location'): db().execute('INSERT INTO survey_locations VALUES(?,?)',(clean['id'],json.dumps(clean['location'])))
+        for photo in photos:
+            db().execute('INSERT INTO survey_photos VALUES(?,?,?,?)',(clean['id'],photo['id'],'image/jpeg',photo['image']))
         db().execute('UPDATE users SET last_seen=? WHERE id=?',(now(),g.user['id'])); db().commit()
         return jsonify(ok=True,id=clean['id']),201
+    @app.get('/api/surveys/<sid>/photos/<pid>')
+    @login_required()
+    def appliance_photo(sid,pid):
+        row=db().execute('SELECT p.image,s.user_id FROM survey_photos p JOIN surveys s ON s.id=p.survey_id WHERE p.survey_id=? AND p.id=?',(sid,pid)).fetchone()
+        if not row or (g.user['role']!='admin' and row['user_id']!=g.user['id']):
+            return jsonify(error='Appliance photo not found.'),404
+        return Response(row['image'],mimetype='image/jpeg',headers={'Content-Disposition':('attachment' if request.args.get('download')=='1' else 'inline')+'; filename=equipment-'+pid+'.jpg'})
     @app.get('/api/my-surveys')
     @login_required()
     def my_surveys(): return jsonify(surveys=[dict(r) for r in db().execute('SELECT id,instrument,community,respondent,completed_at,review,version FROM surveys WHERE user_id=? ORDER BY received_at DESC LIMIT 200',(g.user['id'],))])
@@ -363,7 +379,12 @@ def validate_survey(d):
     if d.get('instrument')=='observation' and d.get('consent')!='Yes': raise ValueError('Confirm site observation authorization.')
     if d.get('location') and (d['gps_consent']!='Yes' or d['consent']!='Yes' or not valid_location(d['location'])): raise ValueError('Location requires separate consent and valid coordinates.')
     answers=d.get('answers')
-    if not isinstance(answers,dict) or len(json.dumps(answers))>500000: raise ValueError('Invalid survey answers')
+    if not isinstance(answers,dict): raise ValueError('Invalid survey answers')
+    answer_text=dict(answers)
+    for qid in ['C_loads','D_equipment']:
+        if isinstance(answers.get(qid),list):
+            answer_text[qid]=[{k:v for k,v in row.items() if k!='photo'} if isinstance(row,dict) else row for row in answers[qid]]
+    if len(json.dumps(answer_text))>500000: raise ValueError('Invalid survey answers')
     allowed={q['id']:q for s in selected_schema['sections'] if s['instrument']==d['instrument'] for q in s['questions']}
     if d['consent']=='No':
         d['answers']={}; d['location']=None; d['metadata']={};d['photo_consent']='Not asked';d['audio_consent']='Not asked'
@@ -398,6 +419,7 @@ def validate_survey(d):
             for k in ['under5','over60','equipment']:
                 if a.get(k) not in ('',None) and float(a[k])>float(a['members']): raise ValueError('A3: subgroup count cannot exceed household members.')
             if a.get('under5') not in ('',None) and a.get('over60') not in ('',None) and float(a['under5'])+float(a['over60'])>float(a['members']): raise ValueError('A3: age groups exceed household members.')
+    d['_survey_photos']=prepare_survey_photos(d)
     for key in ['started_at','completed_at']:
         try:
             dt=datetime.fromisoformat(d[key].replace('Z','+00:00'))
@@ -407,6 +429,16 @@ def validate_survey(d):
     return d
 
 def validate_answer(q,v):
+    if q['id']=='D_equipment':
+        if not isinstance(v,list) or len(v)>100: raise ValueError('D_equipment: maximum 100 equipment cards.')
+        allowed={c['id'] for c in q['columns']}|{'photo'}
+        for row in v:
+            if not isinstance(row,dict) or set(row)-allowed: raise ValueError('D_equipment: invalid equipment fields.')
+            for col in q['columns']: validate_cell(q['id'],col,row.get(col['id'],''))
+        return
+    if q['id']=='C_loads':
+        validate_appliance_inventory(q,v)
+        return
     if q['type']=='select':
         if v not in q['options'] and v!='': raise ValueError(q['id']+': invalid selection')
     elif q['type']=='multi':
@@ -431,6 +463,92 @@ def validate_answer(q,v):
             for index,row in enumerate(v):
                 if row.get('response') and not row.get('terms','').strip(): raise ValueError('F10: record the project-team scenario before the response.')
                 if index and row.get('kwh') not in ('',None): raise ValueError('F10: the first-kWh threshold belongs to the lifeline row only.')
+
+def validate_appliance_inventory(q, rows):
+    if not isinstance(rows,list): raise ValueError('C_loads: invalid appliance inventory.')
+    named=any(isinstance(row,dict) and 'appliance' in row for row in rows)
+    if len(rows)>(100 if named else len(q['rows'])): raise ValueError('C_loads: too many appliance entries.')
+    columns=[c for c in q['columns'] if c['id'] not in ['appliance','name']]
+    allowed={c['id'] for c in columns}|({'appliance','name','photo'} if named else set())
+    for row in rows:
+        if not isinstance(row,dict) or set(row)-allowed: raise ValueError('C_loads: invalid appliance fields.')
+        if named:
+            if row.get('appliance') not in q['rows']: raise ValueError('C_loads: select an appliance type for every card.')
+            name=row.get('name','')
+            if not isinstance(name,str) or len(name)>200: raise ValueError('C_loads: appliance name must be text up to 200 characters.')
+        for col in columns:
+            # Existing time strings (E/N, M / E, lower-case codes, etc.) stay valid.
+            validate_cell('C_loads',dict(col,type='text') if col['id']=='time' else col,row.get(col['id'],''))
+        if named and row['appliance']=='Other' and not (row.get('name','').strip() or (row.get('notes') or '').strip()):
+            raise ValueError('C_loads: describe each Other appliance in its name or notes.')
+
+def jpeg_info(image):
+    """Check bounded JPEG structure and discard EXIF/APP/COM metadata segments."""
+    if not image.startswith(b'\xff\xd8') or not image.endswith(b'\xff\xd9'):
+        raise ValueError('Equipment photo must be a JPEG image.')
+    offset=2;clean=bytearray(image[:2]);dimensions=None;scanned=False
+    while offset<len(image):
+        start=offset
+        if image[offset]!=255: break
+        while offset<len(image) and image[offset]==255: offset+=1
+        if offset>=len(image): break
+        marker=image[offset];offset+=1
+        if marker==217:
+            if dimensions and scanned and offset==len(image):
+                clean.extend(b'\xff\xd9');return bytes(clean),dimensions
+            break
+        if marker in (0,216) or 208<=marker<=215 or offset+2>len(image): break
+        length=int.from_bytes(image[offset:offset+2],'big');end=offset+length
+        if length<2 or end>len(image): break
+        if marker in (192,194):
+            if dimensions or length<11 or image[offset+2]!=8: break
+            height=int.from_bytes(image[offset+3:offset+5],'big');width=int.from_bytes(image[offset+5:offset+7],'big')
+            if not 1<=width<=1280 or not 1<=height<=1280: break
+            dimensions=(width,height)
+        if not (224<=marker<=239 or marker==254): clean.extend(image[start:end])
+        offset=end
+        if marker==218:
+            if not dimensions or length<6: break
+            scanned=True;scan_start=offset
+            # Skip stuffed bytes and restart markers inside compressed scan data.
+            while offset<len(image):
+                boundary=image.find(b'\xff',offset)
+                if boundary<0: offset=len(image);break
+                following=boundary+1
+                while following<len(image) and image[following]==255: following+=1
+                if following==len(image): offset=len(image);break
+                if image[following]==0 or 208<=image[following]<=215:
+                    offset=following+1;continue
+                offset=boundary;break
+            clean.extend(image[scan_start:offset])
+    raise ValueError('Invalid equipment JPEG. Choose the photo again.')
+
+
+def prepare_survey_photos(d):
+    photos=[];seen=set();total=0
+    for row in [row for qid in ['C_loads','D_equipment'] for row in d['answers'].get(qid,[])]:
+        if 'photo' not in row: continue
+        if d['version']!=SCHEMA['version'] or d['consent']!='Yes' or d.get('photo_consent')!='Yes':
+            raise ValueError('Equipment photos require separate photo consent on the current questionnaire.')
+        photo=row['photo']
+        if not isinstance(photo,dict) or set(photo)!={'id','mime','data'} or photo.get('mime')!='image/jpeg':
+            raise ValueError('Invalid equipment photo attachment.')
+        try:
+            if str(uuid.UUID(str(photo['id'])))!=photo['id'] or photo['id'] in seen: raise ValueError()
+        except (ValueError,AttributeError): raise ValueError('Invalid or repeated equipment photo ID.')
+        data=photo['data']
+        if not isinstance(data,str) or not data or len(data)>((MAX_PHOTO_BYTES+2)//3)*4:
+            raise ValueError('Each equipment photo must be at most 320 KiB.')
+        try: image=base64.b64decode(data,validate=True)
+        except (binascii.Error,ValueError): raise ValueError('Invalid equipment photo encoding.')
+        if len(image)>MAX_PHOTO_BYTES: raise ValueError('Each equipment photo must be at most 320 KiB.')
+        total+=len(image)
+        if total>MAX_INTERVIEW_PHOTO_BYTES: raise ValueError('Equipment photos exceed 4 MiB per interview. Remove a photo and retry.')
+        image,(width,height)=jpeg_info(image);seen.add(photo['id'])
+        row['photo']={'id':photo['id'],'mime':'image/jpeg','size':len(image),'width':width,'height':height}
+        photos.append({'id':photo['id'],'image':image})
+    return photos
+
 
 def validate_cell(qid,f,v):
     if v in ('',None): return

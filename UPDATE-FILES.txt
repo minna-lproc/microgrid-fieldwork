@@ -1,16 +1,20 @@
-Based on GitHub commit 0c1e27fe91e7521d3e679d4b2dfad16321ec7745
-Copy all files below into the local Git checkout, preserving paths. No survey JSON, credentials or database is included.
+Latest combined update: mobile appliance and business-equipment cards with offline photos.
+Copy these files into the existing application folder containing app.py.
+Keep the database and instance folder. Read EQUIPMENT-PHOTOS-UPDATE.md.
 
-ENUMERATOR-REFERENCE-UPDATE.md
+APPLIANCE-CARDS-UPDATE.md
+EQUIPMENT-PHOTOS-UPDATE.md
 README.md
+UPDATE-FILES.txt
 app.py
 static/app.js
 static/codebook.csv
 static/codebook.json
 static/style.css
+static/survey.json
 static/sw.js
-tests/browser_reference_ids.py
+tests/browser_equipment_photos.py
 tests/browser_revised.py
-tests/browser_smoke.py
-tests/test_app.py
-tests/test_reference_ids.py
+tests/fixtures/equipment-photo.jpg
+tests/test_appliance_cards.py
+tests/test_equipment_photos.py

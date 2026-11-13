@@ -1,3 +1,7 @@
+## Latest update: equipment cards and offline photos
+
+See [EQUIPMENT-PHOTOS-UPDATE.md](EQUIPMENT-PHOTOS-UPDATE.md) for installation, photo consent, offline collection and deployment instructions. Section C appliances and Section D business equipment use mobile cards; each supports an optional photo.
+
 # Gridfield — automatic enumerator references and account assignments
 
 Read [ENUMERATOR-REFERENCE-UPDATE.md](ENUMERATOR-REFERENCE-UPDATE.md) for this update's installation, existing-account setup, offline ID preparation, numbering behaviour, assignment changes, and validation. This takes precedence over older instructions that ask enumerators to enter IDs or location/language manually for each new interview.
@@ -19,7 +23,7 @@ Flask + SQLite offline PWA for household/enterprise interviews, community key in
 - Run a fresh local demo: `./run-demo.sh` on Linux/macOS, or `run-demo.bat` on Windows. The seeded demo records intentionally use the earlier questionnaire; new collection uses the revision.
 - Production: existing PythonAnywhere WSGI configuration, accounts, persistent database and HTTPS remain in use. Do not run demo seeding against production.
 
-The original installation reference follows. Where it describes the older questionnaire or version-mismatch behavior, the upgrade guide above takes precedence: supported earlier versions remain accepted, exact respondent GPS is excluded from standard exports, and media consent does not provide media capture/upload.
+The original installation reference follows. Where it describes the older questionnaire or version-mismatch behavior, the upgrade guide above takes precedence: supported earlier versions remain accepted, exact respondent GPS is excluded from standard exports, and media consent alone does not activate a camera. The newest equipment-photo guide above documents photo attachments.
 
 ---
 
@@ -104,7 +108,7 @@ Locations are optional and visible only to administrators. Team location sharing
 - Numeric fields reject negative quantities, fractional counts, impossible hours/day and household subgroup counts exceeding household size. Unknown wattages remain blank. Appliance time-of-use accepts M/A/E/N.
 - “None” is exclusive in multi-select answers. “Other” and free-text follow-ups have additional-details inputs.
 - The FPIC note in A7 and the instruction not to record medical conditions in C3 remain visible. FPIC is a real-world consultation process, not something this software can carry out.
-- Observation photo capture is recorded as a checklist answer; **photo uploading is not implemented**. No diagnostic or medical condition field is added.
+- Observation photographs remain external checklist references. In-app photo attachments are available on appliance and business-equipment cards with separate consent. No diagnostic or medical condition field is added.
 - The community instrument uses the same interview and GPS consent gates. The observation checklist uses site authorization and separate site GPS permission.
 
 This is a pilot instrument. Before field rollout, test its wording, translations, consent procedure and enumerator training with the project team. Do not change a schema version mid-fieldwork without planning how queued records will be handled. A version mismatch is retained in the local queue with an error rather than silently accepted. Increment the service worker cache version in both `sw.js` and `app.js` whenever shipping changed app assets.
