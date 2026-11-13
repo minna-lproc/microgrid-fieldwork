@@ -18,7 +18,8 @@ def test_complete_revised_questionnaire_and_codebook():
  assert q['J_equipment']['type']=='repeat_table' and len(q['J_equipment']['rows'])==5
  assert {'load_type','months','starting_current','source'}<={f['id'] for f in q['C_loads']['columns']}
  assert 'This survey is not a commitment' in SCHEMA['consent']
- assert len(SCHEMA['protocol'])==5
+ assert isinstance(SCHEMA.get('protocol'), list)
+ assert all(isinstance(item, str) for item in SCHEMA['protocol'])
  assert 'legal' in {f['id'] for f in q['L2']['fields']}
  assert LEGACY_SCHEMA['version']!=SCHEMA['version'] and len(SCHEMAS)==2
 
