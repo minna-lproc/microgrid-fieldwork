@@ -3,8 +3,12 @@ import csv,io,json,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 book_path=ROOT/'static/codebook.json'
-schema=json.loads((ROOT/'static/survey.json').read_text())
-book=json.loads(book_path.read_text())
+schema=json.loads(
+    (ROOT/'static/survey.json').read_text(encoding='utf-8-sig')
+)
+book=json.loads(
+    book_path.read_text(encoding='utf-8-sig')
+)
 book.update(version=schema['version'],sections=schema['sections'])
 output=io.StringIO();writer=csv.writer(output);writer.writerow(['version','instrument','part','id','question','type','options','fields_or_columns','notes'])
 for key,label in book['metadata'].items():writer.writerow([schema['version'],'all','metadata',key,label,'metadata','','',''])

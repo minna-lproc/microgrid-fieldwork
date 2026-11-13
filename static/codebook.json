@@ -1,5 +1,5 @@
 {
-  "version": "2026-revised-2",
+  "version": "gridfield-shell-revised-v4",
   "conventions": {
     "blank": "Skipped / unknown",
     "zero": "None / zero, not unknown",
@@ -41,10 +41,10 @@
         },
         {
           "id": "A3",
-          "label": "Number of household members living here for most of the year: ______ ;",
+          "label": "Number of household members",
           "type": "fields",
           "options": [],
-          "help": "          of whom under 5 years old: ____ ;            aged 60 and above: ____ ;            with a disability or a condition that needs electrical equipment: ____",
+          "help": " ",
           "fields": [
             {
               "id": "members",
@@ -201,7 +201,7 @@
         },
         {
           "id": "B3",
-          "label": "At what times is electricity available? (select all)",
+          "label": "At what times is electricity available? (select all that apply)",
           "type": "multi",
           "options": [
             "Early morning (4–6 AM)",
@@ -226,7 +226,7 @@
         },
         {
           "id": "B5",
-          "label": "In the last 30 days, how many unplanned power interruptions did you experience, and how long did the longest last? Interruptions: ____ ; longest: ____ hours Total hours without electricity in the last 30 days: ____ hours",
+          "label": "In the last 30 days, how many unplanned power interruptions did you experience, and how long did the longest last? ",
           "type": "fields",
           "options": [],
           "help": "",
@@ -253,7 +253,7 @@
         },
         {
           "id": "B6",
-          "label": "What was the effect of the last long interruption? (select all)",
+          "label": "What was the effect of the last long interruption? (select all that apply)",
           "type": "multi",
           "options": [
             "Spoiled food or stock",
@@ -270,7 +270,7 @@
           "label": "How much does your household spend in a typical month on each? (₱, write 0 if none)",
           "type": "fields",
           "options": [],
-          "help": "Electricity bills: ____  Diesel/gasoline for generator: ____  Kerosene/candles: ____  Battery charging: ____  LPG/firewood for cooking: ____",
+          "help": " ",
           "fields": [
             {
               "id": "bills",
@@ -321,7 +321,7 @@
         },
         {
           "id": "B10",
-          "label": "In the last 12 months, which of these have you experienced with your present supply? (select all)",
+          "label": "In the last 12 months, which of these have you experienced with your present supply? (select all that apply)",
           "type": "multi",
           "options": [
             "Voltage that is too high or too low, or flickering lights",
@@ -441,7 +441,7 @@
           "label": "Which appliance would you buy first if reliable electricity were available all day?",
           "type": "text",
           "options": [],
-          "help": "Record: ____________"
+          "help": " "
         },
         {
           "id": "C2",
@@ -467,7 +467,7 @@
         },
         {
           "id": "C4",
-          "label": "Which appliances would your household like to acquire, and which income activities would you like to start, if electricity were reliable and affordable (even if you cannot afford them now)? Record: ____________",
+          "label": "Which appliances would your household like to acquire, and which income activities would you like to start, if electricity were reliable and affordable (even if you cannot afford them now)? ",
           "type": "text",
           "options": [],
           "help": ""
@@ -599,7 +599,7 @@
         },
         {
           "id": "D6",
-          "label": "Seasonal production and market: typical output in the peak season ____ and the lean season ____ . Where do you sell, and are there enough buyers?",
+          "label": "Seasonal production and market: typical output in the peak season and the lean season. Where do you sell, and are there enough buyers?",
           "type": "fields",
           "options": [],
           "help": "",
@@ -629,7 +629,7 @@
         },
         {
           "id": "D7",
-          "label": "What stops you from starting or expanding this activity? (select all)",
+          "label": "What stops you from starting or expanding this activity? (select all that apply)",
           "type": "multi",
           "options": [
             "Capital",
@@ -727,7 +727,7 @@
         },
         {
           "id": "E6",
-          "label": "Which household loads must never be interrupted? (select all)",
+          "label": "Which household loads must never be interrupted? (select all that apply)",
           "type": "multi",
           "options": [
             "Refrigeration of medicine",
@@ -883,7 +883,7 @@
         },
         {
           "id": "F9",
-          "label": "In the months when income is low or irregular, how does your household cope with energy costs? (select all)",
+          "label": "In the months when income is low or irregular, how does your household cope with energy costs? (select all that apply)",
           "type": "multi",
           "options": [
             "Use less electricity or fuel",
@@ -950,7 +950,7 @@
         },
         {
           "id": "G2",
-          "label": "Where would you want to report a problem or complaint? (select all)",
+          "label": "Where would you want to report a problem or complaint? (select all that apply)",
           "type": "multi",
           "options": [
             "Barangay office",
@@ -975,7 +975,7 @@
         },
         {
           "id": "G4",
-          "label": "What information would you want to receive about the service? (select all)",
+          "label": "What information would you want to receive about the service? (select all that apply)",
           "type": "multi",
           "options": [
             "Tariff and how it is computed",
@@ -989,7 +989,7 @@
         },
         {
           "id": "G5",
-          "label": "Are you worried about any of these? (select all)",
+          "label": "Are you worried about any of these? (select all that apply)",
           "type": "multi",
           "options": [
             "Being disconnected if unable to pay",
@@ -1035,7 +1035,7 @@
         },
         {
           "id": "H3",
-          "label": "What are your main concerns? (select all)",
+          "label": "What are your main concerns? (select all that apply)",
           "type": "multi",
           "options": [
             "Cost",
@@ -1078,7 +1078,7 @@
         },
         {
           "id": "H6",
-          "label": "How do you prefer to receive news and take part in decisions? (select all)",
+          "label": "How do you prefer to receive news and take part in decisions? (select all that apply)",
           "type": "multi",
           "options": [
             "Barangay assembly",
@@ -1100,7 +1100,7 @@
         },
         {
           "id": "H8",
-          "label": "How should the benefits of a microgrid be shared? (select all)",
+          "label": "How should the benefits of a microgrid be shared? (select all that apply)",
           "type": "multi",
           "options": [
             "Lower rates for poor households",
@@ -1151,7 +1151,7 @@
         },
         {
           "id": "H12",
-          "label": "How would you want to check that the operator is doing a good job? (select all)",
+          "label": "How would you want to check that the operator is doing a good job? (select all that apply)",
           "type": "multi",
           "options": [
             "Public report of money collected and spent",
