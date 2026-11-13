@@ -28,7 +28,7 @@ def prepare_files(root, revision):
         relative = path.relative_to(root).as_posix()
         if any(p.startswith('.') or p in ['instance', '__pycache__', 'node_modules'] for p in Path(relative).parts):
             continue
-        if path.suffix.lower() not in {'.py', '.html', '.css', '.js', '.json', '.webmanifest', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico', '.woff', '.woff2', '.ttf'}:
+        if path.suffix.lower() not in {'.py', '.html', '.css', '.js', '.json', '.webmanifest', '.svg', ".csv", '.png', '.jpg', '.jpeg', '.webp', '.ico', '.woff', '.woff2', '.ttf'}:
             raise ValueError('Review this new deployment file type: ' + relative)
         files[relative] = path.read_bytes()
     # Both files currently use the same cache name. Generate one per commit so
