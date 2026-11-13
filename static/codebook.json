@@ -1,5 +1,5 @@
 {
-  "version": "gridfield-shell-revised-v4",
+  "version": "gridfield-shell-revised-v5",
   "conventions": {
     "blank": "Skipped / unknown",
     "zero": "None / zero, not unknown",
@@ -171,7 +171,7 @@
       "questions": [
         {
           "id": "B1",
-          "label": "What does your household use for lighting and power now? (select all)",
+          "label": "What does your household use for lighting and power now? (select all that apply)",
           "type": "multi",
           "options": [
             "Grid / distribution utility",
@@ -492,7 +492,7 @@
         },
         {
           "id": "D2",
-          "label": "Type of activity (select all)",
+          "label": "Type of activity (select all that apply)",
           "type": "multi",
           "options": [
             "Sari-sari store",
@@ -1251,7 +1251,7 @@
           "label": "Has the community had earlier energy projects (solar, hydro, diesel, mini-grid)? How did they perform and why did they stop, if they did?",
           "type": "text",
           "options": [],
-          "help": "Record: ____________"
+          "help": ""
         },
         {
           "id": "I4",
@@ -1413,7 +1413,7 @@
           "label": "Which facilities must stay powered during a typhoon or a long outage? Rank the top three.",
           "type": "text",
           "options": [],
-          "help": "Record: 1 ________  2 ________  3 ________"
+          "help": " "
         },
         {
           "id": "J2",
@@ -1428,7 +1428,7 @@
         },
         {
           "id": "J3",
-          "label": "Who pays for electricity or fuel for public facilities now, and roughly how much per month? Record: ____________",
+          "label": "Who pays for electricity or fuel for public facilities now, and roughly how much per month? ",
           "type": "text",
           "options": [],
           "help": ""
@@ -1443,7 +1443,7 @@
       "questions": [
         {
           "id": "K1",
-          "label": "Which local energy resources does the community know about? (select all)",
+          "label": "Which local energy resources does the community know about? (select all that apply)",
           "type": "multi",
           "options": [
             "Sunny open areas",
@@ -1468,7 +1468,7 @@
             "Unclear",
             "None available"
           ],
-          "help": "Record the location and approximate area: ____________",
+          "help": " ",
           "details": true
         },
         {
@@ -1485,7 +1485,7 @@
         },
         {
           "id": "K4",
-          "label": "Which areas must be avoided when siting equipment? (select all)",
+          "label": "Which areas must be avoided when siting equipment? (select all that apply)",
           "type": "multi",
           "options": [
             "Flood-prone or storm-surge area",
@@ -1501,7 +1501,7 @@
         },
         {
           "id": "K5",
-          "label": "How high does flood or storm surge reach in a severe event? Record: ____ m, last severe event: ____ (year)",
+          "label": "How high does flood or storm surge reach in a severe event?",
           "type": "fields",
           "options": [],
           "help": "",
@@ -1523,7 +1523,7 @@
           "label": "Where could poles and lines run, and are there difficult crossings (rivers, steep terrain, private lots)?",
           "type": "text",
           "options": [],
-          "help": "Record: ____________"
+          "help": ""
         },
         {
           "id": "K7",
@@ -1539,7 +1539,7 @@
         },
         {
           "id": "K8",
-          "label": "Is there a place for used batteries and panels to be collected for proper disposal or recycling? If yes, where, and who manages it? ________",
+          "label": "Is there a place for used batteries and panels to be collected for proper disposal or recycling? If yes, where, and who manages it? ",
           "type": "select",
           "options": [
             "Yes",
@@ -1551,7 +1551,7 @@
         },
         {
           "id": "K9",
-          "label": "In which months is each resource weakest or unavailable? Solar (cloudy or rainy months): ____ ; stream or river flow (low-flow and flood months): ____ ; wind: ____ ; biomass (harvest months): ____ ; tidal or wave: ____",
+          "label": "In which months is each resource weakest or unavailable? ",
           "type": "fields",
           "options": [],
           "help": "",
@@ -1585,28 +1585,28 @@
         },
         {
           "id": "K10",
-          "label": "Stream or river: is the water used by others (irrigation, drinking water, fishing)? How much flow must remain in the stream for fish and downstream users (ecological flow)? Biomass: what other uses compete for it (cooking fuel, feed, fertiliser)? Record: ____________",
+          "label": "Stream or river: is the water used by others (irrigation, drinking water, fishing)? How much flow must remain in the stream for fish and downstream users (ecological flow)? Biomass: what other uses compete for it (cooking fuel, feed, fertiliser)? ",
           "type": "text",
           "options": [],
           "help": ""
         },
         {
           "id": "K11",
-          "label": "Are there biodiversity or watershed areas, erosion-prone slopes, mangroves, coral or other sensitive habitats near the possible site? How much water would be needed to build and run the system, and where would it come from? Record: ____________",
+          "label": "Are there biodiversity or watershed areas, erosion-prone slopes, mangroves, coral or other sensitive habitats near the possible site? How much water would be needed to build and run the system, and where would it come from? ",
           "type": "text",
           "options": [],
           "help": ""
         },
         {
           "id": "K12",
-          "label": "Are other projects (road, port, resort, quarry, other power) existing or planned nearby that could add to environmental pressure (cumulative impacts)? Record: ____________",
+          "label": "Are other projects (road, port, resort, quarry, other power) existing or planned nearby that could add to environmental pressure (cumulative impacts)?",
           "type": "text",
           "options": [],
           "help": ""
         },
         {
           "id": "K13",
-          "label": "Who could collect, recycle or dispose of used batteries, solar panels and electronic waste, and where would they go? Who would pay? Record: ____________",
+          "label": "Who could collect, recycle or dispose of used batteries, solar panels and electronic waste, and where would they go? Who would pay?",
           "type": "text",
           "options": [],
           "help": ""
@@ -1621,7 +1621,7 @@
       "questions": [
         {
           "id": "L1",
-          "label": "Is the community organised? (select all)",
+          "label": "Is the community organised? (select all that apply)",
           "type": "multi",
           "options": [
             "Barangay Development Council",
@@ -1637,7 +1637,7 @@
             "Representatives of remote sitios",
             "None"
           ],
-          "help": "Record the name, role and contact of each formal and informal leader or group for the stakeholder map: ____________"
+          "help": " "
         },
         {
           "id": "L1_stakeholders",
@@ -1677,10 +1677,10 @@
         },
         {
           "id": "L2",
-          "label": "Who must be consulted, and who must give consent, before a microgrid can be built here? Record: ____________",
+          "label": "Who must be consulted, and who must give consent, before a microgrid can be built here? ",
           "type": "fields",
           "options": [],
-          "help": "Separate the following. (a) Legal consent required (for example, FPIC under NCIP rules where legally required, barangay or municipal resolutions, landowner consent): ____________ (b) Customary decision-making (who decides under customary practice, and how): ____________ (c) Household-level consent: ____________",
+          "help": "",
           "fields": [
             {
               "id": "legal",
@@ -1725,7 +1725,7 @@
         },
         {
           "id": "L5",
-          "label": "Which groups may be missed unless they are contacted separately? (select all) For each group selected, note how it will be reached and how it will take part in decisions, not only be consulted.",
+          "label": "Which groups may be missed unless they are contacted separately? (select all that apply) For each group selected, note how it will be reached and how it will take part in decisions, not only be consulted.",
           "type": "multi",
           "options": [
             "Women-headed households",
@@ -1788,21 +1788,21 @@
         },
         {
           "id": "L10",
-          "label": "How should benefits (income, jobs, discounted rates, community fund) be shared, with whom, and who decides? Record: ____________",
+          "label": "How should benefits (income, jobs, discounted rates, community fund) be shared, with whom, and who decides?",
           "type": "text",
           "options": [],
           "help": ""
         },
         {
           "id": "L11",
-          "label": "Which jobs and supplies (materials, labour, services) could be sourced locally? Are there any expectations that community members will give unpaid labour? Record: ____________",
+          "label": "Which jobs and supplies (materials, labour, services) could be sourced locally? Are there any expectations that community members will give unpaid labour?",
           "type": "text",
           "options": [],
           "help": ""
         },
         {
           "id": "L12",
-          "label": "How should decisions, tariffs and finances be reported to the community? How would complaints be handled (grievance mechanism), and who would monitor the operator? Record: ____________",
+          "label": "How should decisions, tariffs and finances be reported to the community? How would complaints be handled (grievance mechanism), and who would monitor the operator? ",
           "type": "text",
           "options": [],
           "help": ""
@@ -1834,7 +1834,7 @@
           "rows": [
             "Existing generator, mini-grid or solar array visible; condition noted",
             "Existing poles or wiring; condition (safe / poor / none)",
-            "Open, unshaded area of at least 1,000 m² near the settlement (record actual length, width and area in m: ____)",
+            "Open, unshaded area of at least 1,000 m² near the settlement (record actual length, width and area in m.)",
             "Tall trees or terrain shading the candidate site",
             "Nearby river or stream with a usable drop in height",
             "Signs of past flooding or storm damage at candidate site",
