@@ -1,5 +1,5 @@
 """Community microgrid survey. Flask API + installable, offline-first client."""
-import csv, io, json, os, secrets, sqlite3, time, uuid
+import csv, io, json, os, re, secrets, sqlite3, time, uuid
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
@@ -8,10 +8,14 @@ from flask import Flask, request, session, jsonify, send_from_directory, Respons
 from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE = Path(__file__).parent
-SCHEMA = json.loads((BASE / 'static/survey.json').read_text())
-LEGACY_SCHEMA = json.loads((BASE / 'static/survey-legacy.json').read_text())
+SCHEMA = json.loads((BASE / 'static/survey.json').read_text(encoding='utf-8-sig'))
+LEGACY_SCHEMA = json.loads((BASE / 'static/survey-legacy.json').read_text(encoding='utf-8-sig'))
 SCHEMAS = {x['version']:x for x in [LEGACY_SCHEMA,SCHEMA]}
 QUESTIONS = {q['id']: q for schema in SCHEMAS.values() for section in schema['sections'] for q in section['questions']}
+
+REFERENCE_CODES = {'household':'HE','community':'CI','observation':'SO'}
+REFERENCE_BLOCK_SIZE = 100
+MAX_REFERENCE_SEQUENCE = 9007199254740991
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
@@ -47,10 +51,22 @@ def create_app(test_config=None):
         CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS survey_locations(survey_id TEXT PRIMARY KEY REFERENCES surveys(id) ON DELETE CASCADE, coordinates TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS enumerator_assignments(user_id TEXT NOT NULL REFERENCES users(id),version INTEGER NOT NULL,assignment TEXT NOT NULL,PRIMARY KEY(user_id,version));
+        CREATE TABLE IF NOT EXISTS reference_counters(user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,last_reserved INTEGER NOT NULL,PRIMARY KEY(user_id,instrument));
+        CREATE TABLE IF NOT EXISTS reference_allocations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,device_id TEXT NOT NULL,request_id TEXT NOT NULL,first_number INTEGER NOT NULL,last_number INTEGER NOT NULL,assignment_version INTEGER NOT NULL,assignment TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(user_id,device_id,request_id));
+        CREATE TABLE IF NOT EXISTS reference_claims(user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,sequence INTEGER NOT NULL,survey_id TEXT NOT NULL UNIQUE,PRIMARY KEY(user_id,instrument,sequence));
         ''')
         columns={row['name'] for row in db().execute('PRAGMA table_info(surveys)')}
         for name,definition in [('metadata',"TEXT NOT NULL DEFAULT '{}'"),('photo_consent',"TEXT NOT NULL DEFAULT 'Not asked'"),('audio_consent',"TEXT NOT NULL DEFAULT 'Not asked'")]:
             if name not in columns: db().execute('ALTER TABLE surveys ADD COLUMN '+name+' '+definition)
+        user_columns={row['name'] for row in db().execute('PRAGMA table_info(users)')}
+        for name,definition in [('municipality_province',"TEXT NOT NULL DEFAULT ''"),('language',"TEXT NOT NULL DEFAULT ''"),('assignment_version','INTEGER NOT NULL DEFAULT 0')]:
+            if name not in user_columns: db().execute('ALTER TABLE users ADD COLUMN '+name+' '+definition)
+        for name,definition in [('reference_mode',"TEXT NOT NULL DEFAULT 'manual'"),('reference_allocation_id','TEXT'),('reference_sequence','INTEGER'),('assignment_version','INTEGER')]:
+            if name not in columns: db().execute('ALTER TABLE surveys ADD COLUMN '+name+' '+definition)
+        for row in db().execute("SELECT * FROM users WHERE role='enumerator'").fetchall():
+            assignment={k:row[k] for k in ['community','municipality_province','language']}
+            if all(isinstance(v,str) and v.strip() for v in assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(row['id'],row['assignment_version'],json.dumps(assignment)))
         # Additive, repeatable migration: move legacy dwelling GPS out of answer rows.
         for row in db().execute("SELECT id,location FROM surveys WHERE location IS NOT NULL AND location NOT IN ('null','')").fetchall():
             db().execute('INSERT OR IGNORE INTO survey_locations VALUES(?,?)',(row['id'],row['location']))
@@ -63,14 +79,14 @@ def create_app(test_config=None):
         result.pop('location',None);result['has_location']=bool(loc)
         result['coarse_location']={'lat':round(loc['lat'],2),'lng':round(loc['lng'],2),'precision':'0.01 degree grid; approximate, not dwelling GPS'} if loc else None
         return result
-    def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target']}
+    def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target','municipality_province','language','assignment_version']}
     def login_required(role=None):
         def decorate(fn):
             @wraps(fn)
             def check(*a,**kw):
                 u=db().execute('SELECT * FROM users WHERE id=? AND active=1',(session.get('uid'),)).fetchone()
                 if not u: return jsonify(error='Sign in to continue. Your offline drafts are retained.'),401
-                if role and u['role']!=role: return jsonify(error='Administrator access required.'),403
+                if role and u['role']!=role: return jsonify(error=('Administrator' if role=='admin' else 'Enumerator')+' access required.'),403
                 g.user=u
                 if request.method not in ('GET','HEAD') and (not session.get('csrf') or not secrets.compare_digest(request.headers.get('X-CSRF-Token',''), session['csrf'])): return jsonify(error='Session token expired. Sign in again.'),403
                 return fn(*a,**kw)
@@ -116,7 +132,49 @@ def create_app(test_config=None):
         if loc and not valid_location(loc): return jsonify(error='Invalid location'),400
         # Omitting location clears it when an enumerator turns sharing off.
         db().execute('UPDATE users SET last_seen=?,location=? WHERE id=?',(now(),json.dumps(dict(loc,recorded_at=now())) if loc else None,g.user['id'])); db().commit()
-        return jsonify(ok=True,server_time=now())
+        return jsonify(ok=True,server_time=now(),user=public_user(g.user))
+    def allocation_record(row):
+        return dict(id=row['id'],instrument=row['instrument'],device_id=row['device_id'],start=row['first_number'],end=row['last_number'],assignment_version=row['assignment_version'],assignment=json.loads(row['assignment']),username=g.user['username'])
+    def bump_reference_counter(user_id,instrument,number):
+        db().execute('INSERT INTO reference_counters VALUES(?,?,?) ON CONFLICT(user_id,instrument) DO UPDATE SET last_reserved=MAX(last_reserved,excluded.last_reserved)',(user_id,instrument,number))
+    @app.post('/api/reference-ranges')
+    @login_required('enumerator')
+    def reference_range():
+        data=request.get_json(silent=True) or {}
+        if not isinstance(data,dict) or data.get('instrument') not in REFERENCE_CODES: return jsonify(error='Choose a valid survey instrument.'),400
+        for key in ['device_id','request_id']:
+            try:
+                if str(uuid.UUID(str(data.get(key))))!=data[key]: raise ValueError()
+            except (ValueError,TypeError,KeyError,AttributeError): return jsonify(error='Invalid device or reservation request ID.'),400
+        if data.get('user_id',g.user['id'])!=g.user['id']: return jsonify(error='Reservation belongs to a different account.'),403
+        db().execute('BEGIN IMMEDIATE')
+        prior=db().execute('SELECT * FROM reference_allocations WHERE user_id=? AND device_id=? AND request_id=?',(g.user['id'],data['device_id'],data['request_id'])).fetchone()
+        if prior:
+            db().rollback()
+            if prior['instrument']!=data['instrument']: return jsonify(error='Reservation request already used for a different instrument.'),409
+            return jsonify(allocation=allocation_record(prior))
+        current=db().execute('SELECT * FROM users WHERE id=?',(g.user['id'],)).fetchone()
+        if not current['active']: db().rollback();return jsonify(error='Account is disabled.'),401
+        assignment={k:current[k] for k in ['community','municipality_province','language']}
+        if not all(isinstance(v,str) and v.strip() for v in assignment.values()):
+            db().rollback();return jsonify(error='Ask the administrator to set your barangay, municipality/province and interview language before preparing this device.'),409
+        db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(current['id'],current['assignment_version'],json.dumps(assignment)))
+        instrument=data['instrument'];counter=db().execute('SELECT last_reserved FROM reference_counters WHERE user_id=? AND instrument=?',(g.user['id'],instrument)).fetchone();last=counter['last_reserved'] if counter else 0
+        # Include older manual references matching the new format without rewriting them.
+        prefix=re.escape(current['username'])+'-'+REFERENCE_CODES[instrument]+'-([0-9]+)'
+        for row in db().execute('SELECT id,respondent FROM surveys WHERE user_id=? AND instrument=?',(g.user['id'],instrument)):
+            match=re.fullmatch(prefix,row['respondent'])
+            if match:
+                number=int(match.group(1));last=max(last,number)
+                if number<=MAX_REFERENCE_SEQUENCE: db().execute('INSERT OR IGNORE INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],instrument,number,row['id']))
+        block_size=max(REFERENCE_BLOCK_SIZE,int(current['target'] or 0))
+        if last>MAX_REFERENCE_SEQUENCE-block_size:
+            db().rollback();return jsonify(error='Reference counter limit reached. Contact the administrator.'),409
+        first=last+1;end=last+block_size;identifier=str(uuid.uuid4())
+        db().execute('INSERT INTO reference_allocations VALUES(?,?,?,?,?,?,?,?,?,?)',(identifier,g.user['id'],instrument,data['device_id'],data['request_id'],first,end,current['assignment_version'],json.dumps(assignment),now()))
+        bump_reference_counter(g.user['id'],instrument,end);db().commit()
+        row=db().execute('SELECT * FROM reference_allocations WHERE id=?',(identifier,)).fetchone()
+        return jsonify(allocation=allocation_record(row)),201
     @app.post('/api/surveys')
     @login_required()
     def submit():
@@ -135,8 +193,42 @@ def create_app(test_config=None):
             db().rollback()
             if existing['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
             return jsonify(ok=True,id=clean['id'],duplicate=True)
+        mode=clean.get('reference_mode','manual')
+        if mode not in ['manual','allocated-v1']:
+            db().rollback();return jsonify(error='Unknown reference allocation mode.'),400
+        allocation=None;sequence=clean.get('reference_sequence')
+        if mode=='allocated-v1':
+            allocation=db().execute('SELECT * FROM reference_allocations WHERE id=? AND user_id=?',(clean.get('reference_allocation_id'),g.user['id'])).fetchone()
+            if not allocation or allocation['instrument']!=clean['instrument'] or isinstance(sequence,bool) or not isinstance(sequence,int) or not allocation['first_number']<=sequence<=allocation['last_number']:
+                db().rollback();return jsonify(error='Reference ID is not in this enumerator’s reserved range. Keep the interview and contact the coordinator.'),400
+            expected=g.user['username']+'-'+REFERENCE_CODES[clean['instrument']]+'-'+str(sequence).zfill(3)
+            version=clean.get('assignment_version')
+            historical=db().execute('SELECT assignment FROM enumerator_assignments WHERE user_id=? AND version=?',(g.user['id'],version)).fetchone() if isinstance(version,int) and not isinstance(version,bool) else None
+            if not historical:
+                db().rollback();return jsonify(error='The saved account assignment is not recognised. Keep the interview and contact the coordinator.'),400
+            snapshot=json.loads(historical['assignment']);metadata=clean.get('metadata',{})
+            if clean['respondent']!=expected or clean['community']!=snapshot['community'] or (clean['consent']=='Yes' and any(metadata.get(k)!=snapshot[k] for k in ['municipality_province','language'])):
+                db().rollback();return jsonify(error='Reference ID and interview details must match the reserved number and administrator assignment.'),400
+            claimed=db().execute('SELECT survey_id FROM reference_claims WHERE user_id=? AND instrument=? AND sequence=?',(g.user['id'],clean['instrument'],sequence)).fetchone()
+            existing_code=db().execute('SELECT id FROM surveys WHERE user_id=? AND instrument=? AND respondent=?',(g.user['id'],clean['instrument'],expected)).fetchone()
+            if claimed or existing_code:
+                db().rollback();return jsonify(error='This reference ID is already used. Keep the interview and contact the coordinator.'),409
+            db().execute('INSERT INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],clean['instrument'],sequence,clean['id']))
+        else:
+            # Older offline clients can still submit their existing manual IDs.
+            match=re.fullmatch(re.escape(g.user['username'])+'-'+REFERENCE_CODES[clean['instrument']]+'-([0-9]+)',clean['respondent'])
+            if match:
+                number=int(match.group(1))
+                if number>MAX_REFERENCE_SEQUENCE:
+                    db().rollback();return jsonify(error='Reference sequence exceeds the supported range.'),400
+                claimed=db().execute('SELECT survey_id FROM reference_claims WHERE user_id=? AND instrument=? AND sequence=?',(g.user['id'],clean['instrument'],number)).fetchone()
+                reserved=db().execute('SELECT id FROM reference_allocations WHERE user_id=? AND instrument=? AND first_number<=? AND last_number>=?',(g.user['id'],clean['instrument'],number,number)).fetchone()
+                if claimed or reserved:
+                    db().rollback();return jsonify(error='This reference ID is already used or reserved. Keep the interview and contact the coordinator.'),409
+                db().execute('INSERT INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],clean['instrument'],number,clean['id']));bump_reference_counter(g.user['id'],clean['instrument'],number)
         db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],'null',json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),clean['version']))
         db().execute('UPDATE surveys SET metadata=?,photo_consent=?,audio_consent=? WHERE id=?',(json.dumps(clean.get('metadata',{})),clean.get('photo_consent','Not asked'),clean.get('audio_consent','Not asked'),clean['id']))
+        if mode=='allocated-v1': db().execute('UPDATE surveys SET reference_mode=?,reference_allocation_id=?,reference_sequence=?,assignment_version=? WHERE id=?',(mode,allocation['id'],sequence,clean['assignment_version'],clean['id']))
         if clean.get('location'): db().execute('INSERT INTO survey_locations VALUES(?,?)',(clean['id'],json.dumps(clean['location'])))
         db().execute('UPDATE users SET last_seen=? WHERE id=?',(now(),g.user['id'])); db().commit()
         return jsonify(ok=True,id=clean['id']),201
@@ -146,7 +238,7 @@ def create_app(test_config=None):
     @app.get('/api/dashboard')
     @login_required('admin')
     def dashboard():
-        users=[dict(r) for r in db().execute("SELECT id,name,username,community,target,active,last_seen,location,(SELECT count(*) FROM surveys WHERE user_id=users.id AND consent='Yes') AS completed FROM users WHERE role='enumerator' ORDER BY name")]
+        users=[dict(r) for r in db().execute("SELECT id,name,username,community,municipality_province,language,assignment_version,target,active,last_seen,location,(SELECT count(*) FROM surveys WHERE user_id=users.id AND consent='Yes') AS completed FROM users WHERE role='enumerator' ORDER BY name")]
         surveys=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
         for u in users: u['location']=json.loads(u['location']) if u['location'] else None
         return jsonify(users=users,surveys=surveys,server_time=now())
@@ -161,24 +253,36 @@ def create_app(test_config=None):
     def add_user():
         d=request.get_json(silent=True) or {}; username=str(d.get('username','')).lower().strip(); password=str(d.get('password','')); name=str(d.get('name','')).strip()
         if not name or len(name)>100 or not username or len(username)>60 or not all(c.isalnum() or c in '._-' for c in username) or len(password)<12: return jsonify(error='Use a name, valid username, and password of at least 12 characters.'),400
+        assignment={k:d.get(k,'') for k in ['community','municipality_province','language']}
+        if any(not isinstance(v,str) or not v.strip() or len(v)>150 for v in assignment.values()): return jsonify(error='Set barangay, municipality/province and interview language (up to 150 characters each).'),400
+        assignment={k:v.strip() for k,v in assignment.items()}
         try: target=int(d.get('target',30)); assert 0<=target<=100000
         except (ValueError,TypeError,AssertionError): return jsonify(error='Target must be 0–100,000.'),400
         try:
-            db().execute('INSERT INTO users(id,username,name,password,role,community,target) VALUES(?,?,?,?,?,?,?)',(str(uuid.uuid4()),username,name,generate_password_hash(password),'enumerator',str(d.get('community',''))[:150],target)); db().commit()
+            db().execute('INSERT INTO users(id,username,name,password,role,community,target,municipality_province,language) VALUES(?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),username,name,generate_password_hash(password),'enumerator',assignment['community'],target,assignment['municipality_province'],assignment['language'])); db().commit()
         except sqlite3.IntegrityError: return jsonify(error='Username is already in use.'),409
         return jsonify(ok=True),201
     @app.patch('/api/users/<uid>')
     @login_required('admin')
     def update_user(uid):
         d=request.get_json(silent=True) or {}
+        db().execute('BEGIN IMMEDIATE')
         u=db().execute("SELECT * FROM users WHERE id=? AND role='enumerator'",(uid,)).fetchone()
         if not u: return jsonify(error='Enumerator not found'),404
+        assignment={k:d.get(k,u[k]) for k in ['community','municipality_province','language']}
+        if any(not isinstance(v,str) or len(v)>150 for v in assignment.values()): return jsonify(error='Assignment fields must be text up to 150 characters.'),400
+        assignment={k:v.strip() for k,v in assignment.items()}
+        if any(k in d for k in assignment) and not all(assignment.values()): return jsonify(error='Complete barangay, municipality/province and interview language together.'),400
+        changed=any(assignment[k]!=u[k] for k in assignment)
         try: target=int(d.get('target',u['target'])); assert 0<=target<=100000
         except (ValueError,TypeError,AssertionError): return jsonify(error='Invalid target'),400
-        db().execute('UPDATE users SET community=?,target=?,active=? WHERE id=?',(str(d.get('community',u['community']))[:150],target,int(bool(d.get('active',u['active']))),uid))
+        old_assignment={k:u[k] for k in assignment}
+        if all(isinstance(v,str) and v.strip() for v in old_assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(uid,u['assignment_version'],json.dumps(old_assignment)))
+        db().execute('UPDATE users SET community=?,municipality_province=?,language=?,assignment_version=assignment_version+?,target=?,active=? WHERE id=?',(assignment['community'],assignment['municipality_province'],assignment['language'],int(changed),target,int(bool(d.get('active',u['active']))),uid))
         if d.get('password'):
             if len(str(d['password']))<12: db().rollback(); return jsonify(error='Password must be at least 12 characters'),400
             db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(d['password']),uid))
+        if all(assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(uid,u['assignment_version']+int(changed),json.dumps(assignment)))
         db().commit(); return jsonify(ok=True)
     @app.patch('/api/surveys/<sid>')
     @login_required('admin')
@@ -212,7 +316,7 @@ def create_app(test_config=None):
     def export():
         rows=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
         if request.args.get('format')=='json': return Response(json.dumps(dict(schema=SCHEMA,schemas=SCHEMAS,location_policy='Approximate locations only; exact GPS is restricted and stored separately.',surveys=rows),ensure_ascii=False),mimetype='application/json',headers={'Content-Disposition':'attachment; filename=microgrid-surveys.json'})
-        out=io.StringIO(); cols=['id','enumerator','instrument','version','community','respondent','consent','gps_consent','photo_consent','audio_consent','metadata','coarse_location','started_at','completed_at','received_at','review']+list(QUESTIONS)
+        out=io.StringIO(); cols=['id','enumerator','instrument','version','community','respondent','reference_mode','reference_sequence','assignment_version','consent','gps_consent','photo_consent','audio_consent','metadata','coarse_location','started_at','completed_at','received_at','review']+list(QUESTIONS)
         w=csv.DictWriter(out,fieldnames=cols); w.writeheader()
         for row in rows:
             cells={k:row.get(k,row['answers'].get(k,'')) for k in cols}
@@ -359,6 +463,7 @@ def demo_seed(db):
             dt=(datetime.now(timezone.utc)-timedelta(days=j%7,hours=i,minutes=15*j)).isoformat(); typ='community' if j==0 else 'household'
             answers={'H2':['Support','Strongly support','Neutral / need more information'][j%3],'B2':['24 hours','8–12 hours','4–7 hours'][j%3],'F2':['₱300–₱599','₱600–₱999','₱1,000–₱1,499'][j%3]} if typ=='household' else {'I1':'Underserved'}
             db.execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version,review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),uid,typ,community,f'DEMO-{i+1:02}-{j+1:03}','Yes','No','null',json.dumps(answers),dt,dt,dt,LEGACY_SCHEMA['version'],'flagged' if j==3 else 'verified' if j>3 else 'pending'))
+    db.execute("UPDATE users SET municipality_province='Davao City / Davao del Sur',language='Cebuano' WHERE role='enumerator'")
     db.commit()
 
 if __name__=='__main__': create_app().run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=False)

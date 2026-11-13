@@ -60,7 +60,7 @@ def test_validation_and_skip_rules(env):
 
 def test_admin_workflow_export_and_disable(env):
  app,c=env;h=login(c);s=survey();s['respondent']='=HYPERLINK("bad")';c.post('/api/surveys',json=s,headers=h)
- h=login(c,'admin');r=c.post('/api/users',headers=h,json={'name':'New Person','username':'new','password':'long-password-2026','community':'Island','target':42});assert r.status_code==201
+ h=login(c,'admin');r=c.post('/api/users',headers=h,json={'name':'New Person','username':'new','password':'long-password-2026','community':'Island','municipality_province':'Davao / Davao del Sur','language':'Cebuano','target':42});assert r.status_code==201
  u=next(x for x in c.get('/api/dashboard').json['users'] if x['username']=='new');assert u['target']==42
  assert c.patch('/api/users/'+u['id'],headers=h,json={'active':False,'target':50}).status_code==200
  assert c.post('/api/login',json={'username':'new','password':'long-password-2026'}).status_code==401

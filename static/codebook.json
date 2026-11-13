@@ -1875,10 +1875,10 @@
     }
   ],
   "metadata": {
-    "respondent": "Coordinator-assigned pseudonymous respondent code",
-    "community": "Barangay / Sitio / Island",
-    "municipality_province": "Municipality / Province",
-    "language": "Language used in interview",
+    "respondent": "For new interviews: automatically generated username-HE/CI/SO-sequence (minimum 3 digits). Existing manual references remain unchanged.",
+    "community": "Administrator-assigned barangay, saved when the interview starts.",
+    "municipality_province": "Administrator-assigned municipality/province, saved when the interview starts.",
+    "language": "Administrator-assigned interview language(s), saved when the interview starts; not a verified translation or independent check of the language actually spoken.",
     "started_at": "Device timestamp with timezone; submitting enumerator is assigned from the authenticated account",
     "consent": "Interview/site authorization Yes/No",
     "gps_consent": "Separate GPS permission Yes/No",
@@ -1890,7 +1890,11 @@
     "replacement": "Was this a replacement of a selected household? Yes/No",
     "replacement_reason": "Required when replacement=Yes",
     "field_notes": "Representation/validation references and notes",
-    "version": "Questionnaire version; earlier interviews are not relabeled"
+    "version": "Questionnaire version; earlier interviews are not relabeled",
+    "reference_mode": "allocated-v1 for newly generated references; manual for existing/older interviews.",
+    "reference_sequence": "Per-enumerator, per-instrument number consumed when a new interview starts; not reused after local deletion or server deletion.",
+    "reference_allocation_id": "Server reservation that permits this phone to allocate numbers offline.",
+    "assignment_version": "Administrator assignment snapshot used when this interview started; separate from questionnaire version and offline app-cache version."
   },
   "privacy": "Exact GPS is stored separately and available only through an administrator endpoint. Standard exports use a 0.01-degree approximate grid. Names/contact details in key-informant answers remain confidential research data."
 }

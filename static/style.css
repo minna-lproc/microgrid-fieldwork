@@ -11,3 +11,5 @@
 .facility-group{padding:18px;margin:18px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcf8}.facility-group .btn{margin-top:12px}.question .table-wrap input,.question .table-wrap select{min-width:110px}.q-help{white-space:normal}
 
 .field-layout>div,.survey-card,.question{min-width:0}
+
+.input[readonly]{background:#f1f4ed;color:#52674c;cursor:default}

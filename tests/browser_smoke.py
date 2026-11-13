@@ -34,6 +34,8 @@ try:
         page.locator('#enum-username').fill('browser-test')
         page.locator('#enum-password').fill('BrowserTest!2026')
         page.locator('#enum-community').fill('Test community')
+        page.locator('#enum-municipality').fill('Davao / Davao del Sur')
+        page.locator('#enum-language').fill('Cebuano')
         page.get_by_role('button',name='Create enumerator').click()
         page.get_by_role('dialog').wait_for(state='hidden')
         page.locator('[data-view="enumerators"]').first.click()
@@ -74,13 +76,14 @@ try:
         page.wait_for_function("() => document.querySelector('.notice').textContent.includes('Offline app files are ready')")
         context.set_offline(True)
         page.locator('[data-start="household"]').click()
-        page.locator('#respondent').fill('OFFLINE-BROWSER-001')
+        reference=page.locator('#respondent').input_value()
+        assert reference=='maria-HE-001' and page.locator('#respondent').get_attribute('readonly') is not None
         page.locator('input[name="consent"][value="Yes"]').check()
         page.locator('input[name="gps_consent"][value="No"]').check()
         page.locator('input[name="photo_consent"][value="No"]').check()
         page.locator('input[name="audio_consent"][value="No"]').check()
-        page.locator('#meta-municipality_province').fill('Davao / Davao del Sur')
-        page.locator('#meta-language').fill('Cebuano')
+        assert page.locator('#meta-municipality_province').input_value()=='Davao City / Davao del Sur'
+        assert page.locator('#meta-language').input_value()=='Cebuano'
         page.get_by_role('button',name='Continue',exact=True).click()
         page.locator('input[data-q="A1"][value="Female"]').check()
         page.get_by_role('button',name='Save & close').click()
@@ -100,21 +103,21 @@ try:
         page.screenshot(path=str(artifacts/'mobile-queue.png'),full_page=True)
         context.set_offline(False)
         page.wait_for_function("() => document.querySelectorAll('[data-resume]').length === 0")
-        page.locator('.draft-item strong').filter(has_text='OFFLINE-BROWSER-001').first.wait_for()
+        page.locator('.draft-item strong').filter(has_text=reference).first.wait_for()
         # Exactly one server row after reconnect, with the correct account ownership.
         summary=page.request.get(url+'/api/my-surveys').json()['surveys']
-        assert len([s for s in summary if s['respondent']=='OFFLINE-BROWSER-001'])==1
+        assert len([s for s in summary if s['respondent']==reference])==1
         assert page.request.get(url+'/api/dashboard').status==403
         page.locator('[data-action="menu"]').click()
         page.locator('[data-view="collect"]').first.click()
         page.locator('[data-start="community"]').click()
-        page.locator('#respondent').fill('COMMUNITY-TEST')
+        assert page.locator('#respondent').input_value()=='maria-CI-001'
         page.locator('input[name="consent"][value="Yes"]').check()
         page.locator('input[name="gps_consent"][value="No"]').check()
         page.locator('input[name="photo_consent"][value="No"]').check()
         page.locator('input[name="audio_consent"][value="No"]').check()
-        page.locator('#meta-municipality_province').fill('Davao / Davao del Sur')
-        page.locator('#meta-language').fill('Cebuano')
+        assert page.locator('#meta-municipality_province').input_value()=='Davao City / Davao del Sur'
+        assert page.locator('#meta-language').input_value()=='Cebuano'
         page.get_by_role('button',name='Continue',exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path=str(artifacts/'mobile-survey.png'),full_page=True)

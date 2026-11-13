@@ -1868,13 +1868,7 @@
     }
   ],
   "version_label": "Revised survey — pilot and ethics-review draft",
-  "protocol": [
-    "Sampling frame. Before fieldwork, obtain the latest list of households per purok or sitio (from the barangay profile or population count). State the sampling frame, the household selection procedure (for example, random selection within each sitio) and the target sample size per sitio, and record these in the field notes.",
-    "Representation. Make sure remote sitios, low-income households, households with different livelihoods (farming, fishing, enterprises, wage work), renters and informal settlers, and other underserved groups are represented. Record every replacement of a selected household and the reason.",
-    "Enumerator protocol. Train enumerators on the consent script, the local-language wording and neutral questioning. Read questions as written, do not lead respondents, and do not make promises about the project.",
-    "Standardised conventions. Use the same recall periods, measurement units, response categories and skip logic throughout the instrument, and define them in the codebook.",
-    "Data quality. Prepare a data dictionary and codebook before field implementation. Where feasible, validate reported electricity use against appliance nameplates, electricity bills, generator records and actual measurements."
-  ],
-  "guidance": "Read questions neutrally. Do not promise a microgrid, a tariff, or continuous 24-hour service. This instrument is a draft for pilot testing and ethics review.",
+  "protocol": [],
+  "guidance": "Read questions neutrally. Do not promise a microgrid, a tariff, or continuous 24-hour service.",
   "gps_notice": "GPS is stored separately from survey answers. Only project-team administrators may view exact coordinates. Standard exports use approximate locations."
 }

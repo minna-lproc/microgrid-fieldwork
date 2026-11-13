@@ -1,3 +1,11 @@
+# Gridfield — automatic enumerator references and account assignments
+
+Read [ENUMERATOR-REFERENCE-UPDATE.md](ENUMERATOR-REFERENCE-UPDATE.md) for this update's installation, existing-account setup, offline ID preparation, numbering behaviour, assignment changes, and validation. This takes precedence over older instructions that ask enumerators to enter IDs or location/language manually for each new interview.
+
+New references use `username-HE-001`, `username-CI-001` and `username-SO-001`. The administrator configures barangay, municipality/province and interview language(s) when creating or managing enumerator accounts. Earlier interviews/drafts retain their existing reference and details. The questionnaire files and your removed Sampling & field notes section are preserved.
+
+---
+
 # Gridfield — revised community microgrid survey
 
 Flask + SQLite offline PWA for household/enterprise interviews, community key informants and site observations, updated to `Microgrid_Community_Survey_REVISED.docx`.

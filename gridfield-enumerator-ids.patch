@@ -1,0 +1,957 @@
+diff --git a/README.md b/README.md
+index 3861d00..7341d69 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,11 @@
++# Gridfield — automatic enumerator references and account assignments
++
++Read [ENUMERATOR-REFERENCE-UPDATE.md](ENUMERATOR-REFERENCE-UPDATE.md) for this update's installation, existing-account setup, offline ID preparation, numbering behaviour, assignment changes, and validation. This takes precedence over older instructions that ask enumerators to enter IDs or location/language manually for each new interview.
++
++New references use `username-HE-001`, `username-CI-001` and `username-SO-001`. The administrator configures barangay, municipality/province and interview language(s) when creating or managing enumerator accounts. Earlier interviews/drafts retain their existing reference and details. The questionnaire files and your removed Sampling & field notes section are preserved.
++
++---
++
+ # Gridfield — revised community microgrid survey
+ 
+ Flask + SQLite offline PWA for household/enterprise interviews, community key informants and site observations, updated to `Microgrid_Community_Survey_REVISED.docx`.
+diff --git a/app.py b/app.py
+index a06eb9a..17d4873 100644
+--- a/app.py
++++ b/app.py
+@@ -1,5 +1,5 @@
+ """Community microgrid survey. Flask API + installable, offline-first client."""
+-import csv, io, json, os, secrets, sqlite3, time, uuid
++import csv, io, json, os, re, secrets, sqlite3, time, uuid
+ from datetime import datetime, timezone, timedelta
+ from functools import wraps
+ from pathlib import Path
+@@ -8,11 +8,15 @@ from flask import Flask, request, session, jsonify, send_from_directory, Respons
+ from werkzeug.security import generate_password_hash, check_password_hash
+ 
+ BASE = Path(__file__).parent
+-SCHEMA = json.loads((BASE / 'static/survey.json').read_text())
+-LEGACY_SCHEMA = json.loads((BASE / 'static/survey-legacy.json').read_text())
++SCHEMA = json.loads((BASE / 'static/survey.json').read_text(encoding='utf-8-sig'))
++LEGACY_SCHEMA = json.loads((BASE / 'static/survey-legacy.json').read_text(encoding='utf-8-sig'))
+ SCHEMAS = {x['version']:x for x in [LEGACY_SCHEMA,SCHEMA]}
+ QUESTIONS = {q['id']: q for schema in SCHEMAS.values() for section in schema['sections'] for q in section['questions']}
+ 
++REFERENCE_CODES = {'household':'HE','community':'CI','observation':'SO'}
++REFERENCE_BLOCK_SIZE = 100
++MAX_REFERENCE_SEQUENCE = 9007199254740991
++
+ def now(): return datetime.now(timezone.utc).isoformat()
+ 
+ def create_app(test_config=None):
+@@ -47,10 +51,22 @@ def create_app(test_config=None):
+         CREATE TABLE IF NOT EXISTS survey_deletions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), deleted_by TEXT NOT NULL REFERENCES users(id), deleted_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT NOT NULL, timestamp REAL NOT NULL);
+         CREATE TABLE IF NOT EXISTS survey_locations(survey_id TEXT PRIMARY KEY REFERENCES surveys(id) ON DELETE CASCADE, coordinates TEXT NOT NULL);
++        CREATE TABLE IF NOT EXISTS enumerator_assignments(user_id TEXT NOT NULL REFERENCES users(id),version INTEGER NOT NULL,assignment TEXT NOT NULL,PRIMARY KEY(user_id,version));
++        CREATE TABLE IF NOT EXISTS reference_counters(user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,last_reserved INTEGER NOT NULL,PRIMARY KEY(user_id,instrument));
++        CREATE TABLE IF NOT EXISTS reference_allocations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,device_id TEXT NOT NULL,request_id TEXT NOT NULL,first_number INTEGER NOT NULL,last_number INTEGER NOT NULL,assignment_version INTEGER NOT NULL,assignment TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(user_id,device_id,request_id));
++        CREATE TABLE IF NOT EXISTS reference_claims(user_id TEXT NOT NULL REFERENCES users(id),instrument TEXT NOT NULL,sequence INTEGER NOT NULL,survey_id TEXT NOT NULL UNIQUE,PRIMARY KEY(user_id,instrument,sequence));
+         ''')
+         columns={row['name'] for row in db().execute('PRAGMA table_info(surveys)')}
+         for name,definition in [('metadata',"TEXT NOT NULL DEFAULT '{}'"),('photo_consent',"TEXT NOT NULL DEFAULT 'Not asked'"),('audio_consent',"TEXT NOT NULL DEFAULT 'Not asked'")]:
+             if name not in columns: db().execute('ALTER TABLE surveys ADD COLUMN '+name+' '+definition)
++        user_columns={row['name'] for row in db().execute('PRAGMA table_info(users)')}
++        for name,definition in [('municipality_province',"TEXT NOT NULL DEFAULT ''"),('language',"TEXT NOT NULL DEFAULT ''"),('assignment_version','INTEGER NOT NULL DEFAULT 0')]:
++            if name not in user_columns: db().execute('ALTER TABLE users ADD COLUMN '+name+' '+definition)
++        for name,definition in [('reference_mode',"TEXT NOT NULL DEFAULT 'manual'"),('reference_allocation_id','TEXT'),('reference_sequence','INTEGER'),('assignment_version','INTEGER')]:
++            if name not in columns: db().execute('ALTER TABLE surveys ADD COLUMN '+name+' '+definition)
++        for row in db().execute("SELECT * FROM users WHERE role='enumerator'").fetchall():
++            assignment={k:row[k] for k in ['community','municipality_province','language']}
++            if all(isinstance(v,str) and v.strip() for v in assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(row['id'],row['assignment_version'],json.dumps(assignment)))
+         # Additive, repeatable migration: move legacy dwelling GPS out of answer rows.
+         for row in db().execute("SELECT id,location FROM surveys WHERE location IS NOT NULL AND location NOT IN ('null','')").fetchall():
+             db().execute('INSERT OR IGNORE INTO survey_locations VALUES(?,?)',(row['id'],row['location']))
+@@ -63,14 +79,14 @@ def create_app(test_config=None):
+         result.pop('location',None);result['has_location']=bool(loc)
+         result['coarse_location']={'lat':round(loc['lat'],2),'lng':round(loc['lng'],2),'precision':'0.01 degree grid; approximate, not dwelling GPS'} if loc else None
+         return result
+-    def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target']}
++    def public_user(u): return {k:u[k] for k in ['id','username','name','role','community','target','municipality_province','language','assignment_version']}
+     def login_required(role=None):
+         def decorate(fn):
+             @wraps(fn)
+             def check(*a,**kw):
+                 u=db().execute('SELECT * FROM users WHERE id=? AND active=1',(session.get('uid'),)).fetchone()
+                 if not u: return jsonify(error='Sign in to continue. Your offline drafts are retained.'),401
+-                if role and u['role']!=role: return jsonify(error='Administrator access required.'),403
++                if role and u['role']!=role: return jsonify(error=('Administrator' if role=='admin' else 'Enumerator')+' access required.'),403
+                 g.user=u
+                 if request.method not in ('GET','HEAD') and (not session.get('csrf') or not secrets.compare_digest(request.headers.get('X-CSRF-Token',''), session['csrf'])): return jsonify(error='Session token expired. Sign in again.'),403
+                 return fn(*a,**kw)
+@@ -116,7 +132,49 @@ def create_app(test_config=None):
+         if loc and not valid_location(loc): return jsonify(error='Invalid location'),400
+         # Omitting location clears it when an enumerator turns sharing off.
+         db().execute('UPDATE users SET last_seen=?,location=? WHERE id=?',(now(),json.dumps(dict(loc,recorded_at=now())) if loc else None,g.user['id'])); db().commit()
+-        return jsonify(ok=True,server_time=now())
++        return jsonify(ok=True,server_time=now(),user=public_user(g.user))
++    def allocation_record(row):
++        return dict(id=row['id'],instrument=row['instrument'],device_id=row['device_id'],start=row['first_number'],end=row['last_number'],assignment_version=row['assignment_version'],assignment=json.loads(row['assignment']),username=g.user['username'])
++    def bump_reference_counter(user_id,instrument,number):
++        db().execute('INSERT INTO reference_counters VALUES(?,?,?) ON CONFLICT(user_id,instrument) DO UPDATE SET last_reserved=MAX(last_reserved,excluded.last_reserved)',(user_id,instrument,number))
++    @app.post('/api/reference-ranges')
++    @login_required('enumerator')
++    def reference_range():
++        data=request.get_json(silent=True) or {}
++        if not isinstance(data,dict) or data.get('instrument') not in REFERENCE_CODES: return jsonify(error='Choose a valid survey instrument.'),400
++        for key in ['device_id','request_id']:
++            try:
++                if str(uuid.UUID(str(data.get(key))))!=data[key]: raise ValueError()
++            except (ValueError,TypeError,KeyError,AttributeError): return jsonify(error='Invalid device or reservation request ID.'),400
++        if data.get('user_id',g.user['id'])!=g.user['id']: return jsonify(error='Reservation belongs to a different account.'),403
++        db().execute('BEGIN IMMEDIATE')
++        prior=db().execute('SELECT * FROM reference_allocations WHERE user_id=? AND device_id=? AND request_id=?',(g.user['id'],data['device_id'],data['request_id'])).fetchone()
++        if prior:
++            db().rollback()
++            if prior['instrument']!=data['instrument']: return jsonify(error='Reservation request already used for a different instrument.'),409
++            return jsonify(allocation=allocation_record(prior))
++        current=db().execute('SELECT * FROM users WHERE id=?',(g.user['id'],)).fetchone()
++        if not current['active']: db().rollback();return jsonify(error='Account is disabled.'),401
++        assignment={k:current[k] for k in ['community','municipality_province','language']}
++        if not all(isinstance(v,str) and v.strip() for v in assignment.values()):
++            db().rollback();return jsonify(error='Ask the administrator to set your barangay, municipality/province and interview language before preparing this device.'),409
++        db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(current['id'],current['assignment_version'],json.dumps(assignment)))
++        instrument=data['instrument'];counter=db().execute('SELECT last_reserved FROM reference_counters WHERE user_id=? AND instrument=?',(g.user['id'],instrument)).fetchone();last=counter['last_reserved'] if counter else 0
++        # Include older manual references matching the new format without rewriting them.
++        prefix=re.escape(current['username'])+'-'+REFERENCE_CODES[instrument]+'-([0-9]+)'
++        for row in db().execute('SELECT id,respondent FROM surveys WHERE user_id=? AND instrument=?',(g.user['id'],instrument)):
++            match=re.fullmatch(prefix,row['respondent'])
++            if match:
++                number=int(match.group(1));last=max(last,number)
++                if number<=MAX_REFERENCE_SEQUENCE: db().execute('INSERT OR IGNORE INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],instrument,number,row['id']))
++        block_size=max(REFERENCE_BLOCK_SIZE,int(current['target'] or 0))
++        if last>MAX_REFERENCE_SEQUENCE-block_size:
++            db().rollback();return jsonify(error='Reference counter limit reached. Contact the administrator.'),409
++        first=last+1;end=last+block_size;identifier=str(uuid.uuid4())
++        db().execute('INSERT INTO reference_allocations VALUES(?,?,?,?,?,?,?,?,?,?)',(identifier,g.user['id'],instrument,data['device_id'],data['request_id'],first,end,current['assignment_version'],json.dumps(assignment),now()))
++        bump_reference_counter(g.user['id'],instrument,end);db().commit()
++        row=db().execute('SELECT * FROM reference_allocations WHERE id=?',(identifier,)).fetchone()
++        return jsonify(allocation=allocation_record(row)),201
+     @app.post('/api/surveys')
+     @login_required()
+     def submit():
+@@ -135,8 +193,42 @@ def create_app(test_config=None):
+             db().rollback()
+             if existing['user_id']!=g.user['id']: return jsonify(error='Survey ID already used.'),409
+             return jsonify(ok=True,id=clean['id'],duplicate=True)
++        mode=clean.get('reference_mode','manual')
++        if mode not in ['manual','allocated-v1']:
++            db().rollback();return jsonify(error='Unknown reference allocation mode.'),400
++        allocation=None;sequence=clean.get('reference_sequence')
++        if mode=='allocated-v1':
++            allocation=db().execute('SELECT * FROM reference_allocations WHERE id=? AND user_id=?',(clean.get('reference_allocation_id'),g.user['id'])).fetchone()
++            if not allocation or allocation['instrument']!=clean['instrument'] or isinstance(sequence,bool) or not isinstance(sequence,int) or not allocation['first_number']<=sequence<=allocation['last_number']:
++                db().rollback();return jsonify(error='Reference ID is not in this enumerator’s reserved range. Keep the interview and contact the coordinator.'),400
++            expected=g.user['username']+'-'+REFERENCE_CODES[clean['instrument']]+'-'+str(sequence).zfill(3)
++            version=clean.get('assignment_version')
++            historical=db().execute('SELECT assignment FROM enumerator_assignments WHERE user_id=? AND version=?',(g.user['id'],version)).fetchone() if isinstance(version,int) and not isinstance(version,bool) else None
++            if not historical:
++                db().rollback();return jsonify(error='The saved account assignment is not recognised. Keep the interview and contact the coordinator.'),400
++            snapshot=json.loads(historical['assignment']);metadata=clean.get('metadata',{})
++            if clean['respondent']!=expected or clean['community']!=snapshot['community'] or (clean['consent']=='Yes' and any(metadata.get(k)!=snapshot[k] for k in ['municipality_province','language'])):
++                db().rollback();return jsonify(error='Reference ID and interview details must match the reserved number and administrator assignment.'),400
++            claimed=db().execute('SELECT survey_id FROM reference_claims WHERE user_id=? AND instrument=? AND sequence=?',(g.user['id'],clean['instrument'],sequence)).fetchone()
++            existing_code=db().execute('SELECT id FROM surveys WHERE user_id=? AND instrument=? AND respondent=?',(g.user['id'],clean['instrument'],expected)).fetchone()
++            if claimed or existing_code:
++                db().rollback();return jsonify(error='This reference ID is already used. Keep the interview and contact the coordinator.'),409
++            db().execute('INSERT INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],clean['instrument'],sequence,clean['id']))
++        else:
++            # Older offline clients can still submit their existing manual IDs.
++            match=re.fullmatch(re.escape(g.user['username'])+'-'+REFERENCE_CODES[clean['instrument']]+'-([0-9]+)',clean['respondent'])
++            if match:
++                number=int(match.group(1))
++                if number>MAX_REFERENCE_SEQUENCE:
++                    db().rollback();return jsonify(error='Reference sequence exceeds the supported range.'),400
++                claimed=db().execute('SELECT survey_id FROM reference_claims WHERE user_id=? AND instrument=? AND sequence=?',(g.user['id'],clean['instrument'],number)).fetchone()
++                reserved=db().execute('SELECT id FROM reference_allocations WHERE user_id=? AND instrument=? AND first_number<=? AND last_number>=?',(g.user['id'],clean['instrument'],number,number)).fetchone()
++                if claimed or reserved:
++                    db().rollback();return jsonify(error='This reference ID is already used or reserved. Keep the interview and contact the coordinator.'),409
++                db().execute('INSERT INTO reference_claims VALUES(?,?,?,?)',(g.user['id'],clean['instrument'],number,clean['id']));bump_reference_counter(g.user['id'],clean['instrument'],number)
+         db().execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(clean['id'],g.user['id'],clean['instrument'],clean['community'],clean['respondent'],clean['consent'],clean['gps_consent'],'null',json.dumps(clean['answers']),clean['started_at'],clean['completed_at'],now(),clean['version']))
+         db().execute('UPDATE surveys SET metadata=?,photo_consent=?,audio_consent=? WHERE id=?',(json.dumps(clean.get('metadata',{})),clean.get('photo_consent','Not asked'),clean.get('audio_consent','Not asked'),clean['id']))
++        if mode=='allocated-v1': db().execute('UPDATE surveys SET reference_mode=?,reference_allocation_id=?,reference_sequence=?,assignment_version=? WHERE id=?',(mode,allocation['id'],sequence,clean['assignment_version'],clean['id']))
+         if clean.get('location'): db().execute('INSERT INTO survey_locations VALUES(?,?)',(clean['id'],json.dumps(clean['location'])))
+         db().execute('UPDATE users SET last_seen=? WHERE id=?',(now(),g.user['id'])); db().commit()
+         return jsonify(ok=True,id=clean['id']),201
+@@ -146,7 +238,7 @@ def create_app(test_config=None):
+     @app.get('/api/dashboard')
+     @login_required('admin')
+     def dashboard():
+-        users=[dict(r) for r in db().execute("SELECT id,name,username,community,target,active,last_seen,location,(SELECT count(*) FROM surveys WHERE user_id=users.id AND consent='Yes') AS completed FROM users WHERE role='enumerator' ORDER BY name")]
++        users=[dict(r) for r in db().execute("SELECT id,name,username,community,municipality_province,language,assignment_version,target,active,last_seen,location,(SELECT count(*) FROM surveys WHERE user_id=users.id AND consent='Yes') AS completed FROM users WHERE role='enumerator' ORDER BY name")]
+         surveys=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
+         for u in users: u['location']=json.loads(u['location']) if u['location'] else None
+         return jsonify(users=users,surveys=surveys,server_time=now())
+@@ -161,24 +253,36 @@ def create_app(test_config=None):
+     def add_user():
+         d=request.get_json(silent=True) or {}; username=str(d.get('username','')).lower().strip(); password=str(d.get('password','')); name=str(d.get('name','')).strip()
+         if not name or len(name)>100 or not username or len(username)>60 or not all(c.isalnum() or c in '._-' for c in username) or len(password)<12: return jsonify(error='Use a name, valid username, and password of at least 12 characters.'),400
++        assignment={k:d.get(k,'') for k in ['community','municipality_province','language']}
++        if any(not isinstance(v,str) or not v.strip() or len(v)>150 for v in assignment.values()): return jsonify(error='Set barangay, municipality/province and interview language (up to 150 characters each).'),400
++        assignment={k:v.strip() for k,v in assignment.items()}
+         try: target=int(d.get('target',30)); assert 0<=target<=100000
+         except (ValueError,TypeError,AssertionError): return jsonify(error='Target must be 0–100,000.'),400
+         try:
+-            db().execute('INSERT INTO users(id,username,name,password,role,community,target) VALUES(?,?,?,?,?,?,?)',(str(uuid.uuid4()),username,name,generate_password_hash(password),'enumerator',str(d.get('community',''))[:150],target)); db().commit()
++            db().execute('INSERT INTO users(id,username,name,password,role,community,target,municipality_province,language) VALUES(?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),username,name,generate_password_hash(password),'enumerator',assignment['community'],target,assignment['municipality_province'],assignment['language'])); db().commit()
+         except sqlite3.IntegrityError: return jsonify(error='Username is already in use.'),409
+         return jsonify(ok=True),201
+     @app.patch('/api/users/<uid>')
+     @login_required('admin')
+     def update_user(uid):
+         d=request.get_json(silent=True) or {}
++        db().execute('BEGIN IMMEDIATE')
+         u=db().execute("SELECT * FROM users WHERE id=? AND role='enumerator'",(uid,)).fetchone()
+         if not u: return jsonify(error='Enumerator not found'),404
++        assignment={k:d.get(k,u[k]) for k in ['community','municipality_province','language']}
++        if any(not isinstance(v,str) or len(v)>150 for v in assignment.values()): return jsonify(error='Assignment fields must be text up to 150 characters.'),400
++        assignment={k:v.strip() for k,v in assignment.items()}
++        if any(k in d for k in assignment) and not all(assignment.values()): return jsonify(error='Complete barangay, municipality/province and interview language together.'),400
++        changed=any(assignment[k]!=u[k] for k in assignment)
+         try: target=int(d.get('target',u['target'])); assert 0<=target<=100000
+         except (ValueError,TypeError,AssertionError): return jsonify(error='Invalid target'),400
+-        db().execute('UPDATE users SET community=?,target=?,active=? WHERE id=?',(str(d.get('community',u['community']))[:150],target,int(bool(d.get('active',u['active']))),uid))
++        old_assignment={k:u[k] for k in assignment}
++        if all(isinstance(v,str) and v.strip() for v in old_assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(uid,u['assignment_version'],json.dumps(old_assignment)))
++        db().execute('UPDATE users SET community=?,municipality_province=?,language=?,assignment_version=assignment_version+?,target=?,active=? WHERE id=?',(assignment['community'],assignment['municipality_province'],assignment['language'],int(changed),target,int(bool(d.get('active',u['active']))),uid))
+         if d.get('password'):
+             if len(str(d['password']))<12: db().rollback(); return jsonify(error='Password must be at least 12 characters'),400
+             db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(d['password']),uid))
++        if all(assignment.values()): db().execute('INSERT OR IGNORE INTO enumerator_assignments VALUES(?,?,?)',(uid,u['assignment_version']+int(changed),json.dumps(assignment)))
+         db().commit(); return jsonify(ok=True)
+     @app.patch('/api/surveys/<sid>')
+     @login_required('admin')
+@@ -212,7 +316,7 @@ def create_app(test_config=None):
+     def export():
+         rows=[survey_record(r) for r in db().execute('SELECT s.*,u.name AS enumerator FROM surveys s JOIN users u ON u.id=s.user_id ORDER BY received_at DESC')]
+         if request.args.get('format')=='json': return Response(json.dumps(dict(schema=SCHEMA,schemas=SCHEMAS,location_policy='Approximate locations only; exact GPS is restricted and stored separately.',surveys=rows),ensure_ascii=False),mimetype='application/json',headers={'Content-Disposition':'attachment; filename=microgrid-surveys.json'})
+-        out=io.StringIO(); cols=['id','enumerator','instrument','version','community','respondent','consent','gps_consent','photo_consent','audio_consent','metadata','coarse_location','started_at','completed_at','received_at','review']+list(QUESTIONS)
++        out=io.StringIO(); cols=['id','enumerator','instrument','version','community','respondent','reference_mode','reference_sequence','assignment_version','consent','gps_consent','photo_consent','audio_consent','metadata','coarse_location','started_at','completed_at','received_at','review']+list(QUESTIONS)
+         w=csv.DictWriter(out,fieldnames=cols); w.writeheader()
+         for row in rows:
+             cells={k:row.get(k,row['answers'].get(k,'')) for k in cols}
+@@ -359,6 +463,7 @@ def demo_seed(db):
+             dt=(datetime.now(timezone.utc)-timedelta(days=j%7,hours=i,minutes=15*j)).isoformat(); typ='community' if j==0 else 'household'
+             answers={'H2':['Support','Strongly support','Neutral / need more information'][j%3],'B2':['24 hours','8–12 hours','4–7 hours'][j%3],'F2':['₱300–₱599','₱600–₱999','₱1,000–₱1,499'][j%3]} if typ=='household' else {'I1':'Underserved'}
+             db.execute('INSERT INTO surveys(id,user_id,instrument,community,respondent,consent,gps_consent,location,answers,started_at,completed_at,received_at,version,review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),uid,typ,community,f'DEMO-{i+1:02}-{j+1:03}','Yes','No','null',json.dumps(answers),dt,dt,dt,LEGACY_SCHEMA['version'],'flagged' if j==3 else 'verified' if j>3 else 'pending'))
++    db.execute("UPDATE users SET municipality_province='Davao City / Davao del Sur',language='Cebuano' WHERE role='enumerator'")
+     db.commit()
+ 
+ if __name__=='__main__': create_app().run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=False)
+diff --git a/static/app.js b/static/app.js
+index 0a72741..6d2edff 100644
+--- a/static/app.js
++++ b/static/app.js
+@@ -16,7 +16,7 @@ async function api(path, options = {}) {
+     state.online = true; updateConnection(); let body; try { body = await res.json(); } catch { throw Error('The server returned an unexpected response.'); }
+     if (!res.ok) { if (res.status === 401 && state.user) { state.csrf = null; updateConnection(); } throw Object.assign(Error(body.error || 'Request failed'), { status: res.status }); } return body;
+ }
+-function openDB() { return new Promise((resolve, reject) => { const r = indexedDB.open('gridfield-v1', 2); r.onupgradeneeded = () => { const database = r.result; if (!database.objectStoreNames.contains('surveys')) database.createObjectStore('surveys', { keyPath: 'id' }); if (!database.objectStoreNames.contains('locations')) database.createObjectStore('locations', { keyPath: 'id' }); const source = r.transaction.objectStore('surveys'), locations = r.transaction.objectStore('locations'); const cursor = source.openCursor(); cursor.onsuccess = () => { const c = cursor.result; if (!c) return; const d = c.value; if (d.location) { locations.put({ id: d.id, owner: d.owner, coordinates: d.location }); delete d.location; c.update(d); } c.continue(); }; }; r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); resolve(r.result); }; r.onerror = () => reject(r.error); r.onblocked = () => toast('Close other Gridfield tabs so the offline storage update can finish.'); }); }
++function openDB() { return new Promise((resolve, reject) => { const r = indexedDB.open('gridfield-v1', 3); r.onupgradeneeded = () => { const database = r.result; if (!database.objectStoreNames.contains('surveys')) database.createObjectStore('surveys', { keyPath: 'id' }); if (!database.objectStoreNames.contains('locations')) database.createObjectStore('locations', { keyPath: 'id' }); if (!database.objectStoreNames.contains('allocations')) database.createObjectStore('allocations', { keyPath: 'key' }); const source = r.transaction.objectStore('surveys'), locations = r.transaction.objectStore('locations'); const cursor = source.openCursor(); cursor.onsuccess = () => { const c = cursor.result; if (!c) return; const d = c.value; if (d.location) { locations.put({ id: d.id, owner: d.owner, coordinates: d.location }); delete d.location; c.update(d); } c.continue(); }; }; r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); resolve(r.result); }; r.onerror = () => reject(r.error); r.onblocked = () => toast('Close other Gridfield tabs so the offline storage update can finish.'); }); }
+ function storage(mode, fn, store = 'surveys') { return new Promise((resolve, reject) => { const tx = db.transaction(store, mode); const result = fn(tx.objectStore(store)); tx.oncomplete = () => resolve(result?.result); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); }); }
+ const getLocal = async () => { const [records, locations] = await Promise.all([storage('readonly', s => s.getAll()), storage('readonly', s => s.getAll(), 'locations')]); const points = new Map(locations.filter(l => l.owner === state.user?.id).map(l => [l.id, l.coordinates])); state.local = records.filter(d => d.owner === state.user?.id).map(d => ({ ...d, location: points.get(d.id) || null })); };
+ function localWrite(d, remove = false) { return new Promise((resolve, reject) => { const tx = db.transaction(['surveys', 'locations'], 'readwrite'); if (remove) { tx.objectStore('surveys').delete(d.id); tx.objectStore('locations').delete(d.id); } else { const copy = structuredClone(d); delete copy.location; tx.objectStore('surveys').put(copy); if (d.location) tx.objectStore('locations').put({ id: d.id, owner: d.owner, coordinates: d.location }); else tx.objectStore('locations').delete(d.id); } tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); }); }
+@@ -28,7 +28,7 @@ function loginScreen(message = '') {
+     app.innerHTML = `<div class="login"><section class="login-story">${brand()}<h1>Better energy.<br><em>Starts with listening.</em></h1><p>A clearer picture of community energy needs, one conversation at a time.</p><div class="eyebrow">COMMUNITY MICROGRID RESEARCH</div><p>University of the Immaculate Conception<br>Field collection · Team coordination · Local insight</p></section><section class="login-right"><div class="login-box"><div class="eyebrow">WELCOME TO GRIDFIELD</div><h2>Your fieldwork, connected.</h2><p>Sign in to collect surveys or see how your team is doing. Connect once to prepare this device for offline use.</p><form id="login-form"><label class="form-label" for="username">Username</label><input id="username" class="input" autocomplete="username" required><label class="form-label" for="password">Password</label><input id="password" class="input" type="password" autocomplete="current-password" required><div class="error" id="login-error" role="alert">${esc(message)}</div><button class="btn primary" type="submit">Sign in to workspace ${icon('arrow')}</button></form>${state.demo ? `<div class="login-demo"><strong>Explore the demo</strong><br>All sample records and locations are synthetic.<br><button class="text-btn" data-action="demo-admin">Open dashboard →</button><button class="text-btn" data-action="demo-field">Try field collection →</button></div>` : ''}<p class="subtitle">Shared device? Sign out when you finish. Offline records remain stored in this browser until you remove them.</p></div></section></div>`;
+     $('#login-form').onsubmit = async e => { e.preventDefault(); const btn = e.target.querySelector('button'); btn.disabled = true; try { await signIn($('#username').value, $('#password').value); } catch (err) { $('#login-error').textContent = err.message; } finally { btn.disabled = false; } };
+ }
+-async function signIn(username, password) { const result = await api('login', { method: 'POST', body: JSON.stringify({ username, password }) }); Object.assign(state, result, { view: result.user.role === 'admin' ? 'overview' : 'collect', draft: null, step: 0 }); localStorage.setItem('gridfield-user', JSON.stringify(state.user)); state.sharing = localStorage.getItem('gridfield-sharing-' + state.user.id) === 'true'; await getLocal(); await loadData(); render(); await syncQueue(); await checkin(); startTimers(); }
++async function signIn(username, password) { const result = await api('login', { method: 'POST', body: JSON.stringify({ username, password }) }); Object.assign(state, result, { view: result.user.role === 'admin' ? 'overview' : 'collect', draft: null, step: 0 }); localStorage.setItem('gridfield-user', JSON.stringify(state.user)); state.sharing = localStorage.getItem('gridfield-sharing-' + state.user.id) === 'true'; await getLocal(); await loadData(); await prepareReferences(false); render(); await syncQueue(); await checkin(); startTimers(); }
+ function startTimers() { clearInterval(refreshTimer); refreshTimer = setInterval(async () => { if (!state.user || document.hidden) return; if (navigator.onLine) { await checkin(); await syncQueue(); if (state.user.role === 'admin' && !state.draft) { try { await loadData(); if (!$('#modal').open && !document.activeElement?.matches('input,select,textarea')) render(); } catch { } } } }, 60000); }
+ async function loadData() { if (!state.user) return; if (state.user.role === 'admin') { try { state.data = await api('dashboard'); state.dataLoadedAt = new Date().toISOString(); } catch (err) { toast(err.message); } } else { try { state.mySurveys = (await api('my-surveys')).surveys; } catch { } } }
+ function filtered() { if (!state.data) return []; const cutoff = state.period === 'all' ? 0 : Date.now() - Number(state.period) * 86400000; return state.data.surveys.filter(s => (state.community === 'all' || s.community === state.community) && (!state.versionFilter || state.versionFilter === 'all' || s.version === state.versionFilter) && new Date(s.completed_at).getTime() >= cutoff); }
+@@ -55,7 +55,7 @@ function overviewView() {
+ }
+ function activityChart(rows) { let days = Array.from({ length: 7 }, (_, i) => { let d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 6 + i); return d; }); let counts = days.map(d => rows.filter(s => new Date(s.completed_at) >= d && new Date(s.completed_at) < new Date(+d + 86400000)).length); let max = Math.max(4, ...counts), scale = Math.ceil(max / 4) * 4; return `<section class="card"><div class="card-head"><div><h2>Collection activity</h2><p class="card-note">Interviews completed over the last 7 days</p></div><span class="legend"><i></i>Submissions</span></div><div class="chart" role="img" aria-label="Daily submissions: ${counts.join(', ')}"><div class="gridlines">${[4, 3, 2, 1, 0].map(n => `<div class="gridline"><span>${scale * n / 4}</span></div>`).join('')}</div>${counts.map((n, i) => `<div class="bar-col"><div class="bar" style="height:${n / scale * 100}%"><span>${n || ''}</span></div><span class="bar-label">${days[i].toLocaleDateString(undefined, { weekday: 'short' })}</span></div>`).join('')}</div><div class="chart-footer"><span>${days[0].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${date(new Date())}</span><span>${fmt(counts.reduce((a, n) => a + n, 0))} interviews this week</span></div></section>`; }
+ function coverageCard(rows) { let counts = Object.keys(instrumentNames).map(t => rows.filter(s => s.instrument === t).length), total = rows.length, p1 = total ? counts[0] / total * 100 : 0, p2 = total ? counts[1] / total * 100 : 0; return `<section class="card"><div class="card-head"><div><h2>A complete community picture</h2><p class="card-note">Submissions by survey instrument</p></div>${icon('leaf')}</div><div class="coverage"><div class="donut" style="background:conic-gradient(#54764d 0% ${p1}%,#adc48b ${p1}% ${p1 + p2}%,#e3ebd5 ${p1 + p2}% 100%)"><div class="donut-inner"><strong>${total}</strong><span>submissions</span></div></div><div class="donut-legend">${['Households', 'Key informants', 'Observations'].map((n, i) => `<div><i class="swatch" style="background:${['#54764d', '#adc48b', '#e3ebd5'][i]}"></i>${n}<b>${counts[i]}</b></div>`).join('')}</div></div><div class="coverage-note">${icon('pin')} Two survey instruments. One shared energy future.</div></section>`; }
+-function personCard(u, expanded = false, rows = null) { const m = u.last_seen ? (Date.now() - new Date(u.last_seen)) / 60000 : Infinity, status = !u.active ? 'Disabled' : m < 15 ? 'Active' : m < 120 ? 'Away' : 'Offline', count = rows ? rows.filter(s => s.user_id === u.id && s.consent === 'Yes').length : u.completed; return `<article class="person-card"><div class="person-top"><span class="avatar">${esc(initials(u.name))}</span><div><strong>${esc(u.name)}</strong><small>${esc(u.community || 'Unassigned')}</small></div><i class="status-dot ${status === 'Active' ? '' : status === 'Away' ? 'idle' : 'offline'}" title="${status}" aria-label="${status}"></i></div><div class="person-stats"><span>Interviews completed</span><strong>${count} <span>/ ${u.target}</span></strong></div><div class="mini-progress"><i style="width:${u.target ? Math.min(count / u.target * 100, 100) : 0}%"></i></div><div class="person-foot">${icon('clock')} ${status} · ${relative(u.last_seen)}</div>${expanded ? `<div class="roster-extra">${u.location ? `${icon('pin')} Last shared location · ±${Math.round(u.location.accuracy)} m<br><a target="_blank" rel="noopener noreferrer" href="https://www.openstreetmap.org/?mlat=${u.location.lat}&mlon=${u.location.lng}#map=15/${u.location.lat}/${u.location.lng}">View recorded location ↗</a><br><small>${esc(fullDate(u.location.recorded_at))}</small>` : `${icon('pin')} No location shared`}<br><button class="btn" data-edit-user="${u.id}">${icon('settings')}Manage enumerator</button></div>` : ''}</article>`; }
++function personCard(u, expanded = false, rows = null) { const m = u.last_seen ? (Date.now() - new Date(u.last_seen)) / 60000 : Infinity, status = !u.active ? 'Disabled' : m < 15 ? 'Active' : m < 120 ? 'Away' : 'Offline', count = rows ? rows.filter(s => s.user_id === u.id && s.consent === 'Yes').length : u.completed; return `<article class="person-card"><div class="person-top"><span class="avatar">${esc(initials(u.name))}</span><div><strong>${esc(u.name)}</strong><small>${esc(u.community || 'Unassigned')}</small></div><i class="status-dot ${status === 'Active' ? '' : status === 'Away' ? 'idle' : 'offline'}" title="${status}" aria-label="${status}"></i></div><div class="person-stats"><span>Interviews completed</span><strong>${count} <span>/ ${u.target}</span></strong></div><div class="mini-progress"><i style="width:${u.target ? Math.min(count / u.target * 100, 100) : 0}%"></i></div><div class="person-foot">${icon('clock')} ${status} · ${relative(u.last_seen)}</div>${expanded ? `<div class="roster-extra">${esc(u.municipality_province||'Municipality/province not set')}<br>${esc(u.language||'Language not set')}<br>${u.location ? `${icon('pin')} Last shared location · ±${Math.round(u.location.accuracy)} m<br><a target="_blank" rel="noopener noreferrer" href="https://www.openstreetmap.org/?mlat=${u.location.lat}&mlon=${u.location.lng}#map=15/${u.location.lat}/${u.location.lng}">View recorded location ↗</a><br><small>${esc(fullDate(u.location.recorded_at))}</small>` : `${icon('pin')} No location shared`}<br><button class="btn" data-edit-user="${u.id}">${icon('settings')}Manage enumerator</button></div>` : ''}</article>`; }
+ function enumeratorsView() { return heading('PEOPLE & PROGRESS', 'Your field team', 'Assignments, collection targets, and each enumerator’s last connection.', `<button class="btn" data-action="refresh">${icon('sync')}Refresh</button><button class="btn primary" data-action="add-enumerator">${icon('plus')}Add enumerator</button>`) + (state.data ? filters() + `<div class="notice">Active means a check-in within 15 minutes. Locations are shared voluntarily while the app is open; offline activity appears after sync.</div><div class="roster-grid">${filteredUsers().map(u => personCard(u, true)).join('') || '<div class="empty">No enumerators yet.</div>'}</div>` : unavailable()); }
+ function surveyTable(rows) { if (!rows.length) return '<div class="empty">No submissions yet.<br>Synced interviews will appear here.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Respondent ID</th><th>Community</th><th>Enumerator</th><th>Instrument</th><th>Version</th><th>Completed</th><th>Review</th><th><span class="hidden">Open</span></th></tr></thead><tbody>${rows.map(s => `<tr><td><button class="text-btn" data-survey="${s.id}">${esc(s.respondent)}</button>${s.consent === 'No' ? '<span class="pill neutral">Declined</span>' : ''}</td><td>${esc(s.community)}</td><td><span class="table-person"><span class="avatar">${esc(initials(s.enumerator))}</span>${esc(s.enumerator)}</span></td><td>${s.instrument === 'household' ? 'Household' : s.instrument === 'community' ? 'Key informant' : 'Observation'}</td><td><span class="pill neutral">${s.version === schema.version ? 'Revised' : 'Earlier'}</span></td><td>${date(s.completed_at)}</td><td><span class="pill ${s.review}">${s.review === 'verified' ? icon('check') : ''}${s.review === 'pending' ? 'Pending review' : s.review === 'flagged' ? 'Flagged' : 'Verified'}</span></td><td><button class="row-btn" data-survey="${s.id}" aria-label="Open ${esc(s.respondent)}">${icon('chevron')}</button></td></tr>`).join('')}</tbody></table></div>`; }
+ function responseRows() { return filtered().filter(s => (state.review === 'all' || s.review === state.review) && [s.respondent, s.community, s.enumerator].some(x => x.toLowerCase().includes(state.search.toLowerCase()))); }
+@@ -77,17 +77,100 @@ function insightsView() {
+     const scenarioNames = schema.sections.flatMap(s => s.questions).find(q => q.id === 'F10').rows;
+     return originalInsightsView() + `<div class="notice" style="margin-top:24px">Revised-survey indicators below exclude earlier-version interviews. Multiple-choice percentages can total more than 100%. Willingness to pay is a stated preference, not verified ability to pay. Seasonal income and affordability stress should be reviewed together.</div><div class="stats"><div class="stat"><div class="label">Revised interviews</div><div class="value">${revisedRows.length}</div></div><div class="stat"><div class="label">ICC/IP consultation indicators</div><div class="value">${households.filter(r => String(r.answers.A7 || '').startsWith('Yes')).length}</div><div class="foot">Household answers do not constitute FPIC.</div></div><div class="stat"><div class="label">Electrical medical priority loads</div><div class="value">${households.filter(r => r.answers.C3 === 'Yes').length}</div><div class="foot">No medical conditions recorded.</div></div><div class="stat"><div class="label">Seasonal household income</div><div class="value">${households.filter(r => r.answers.F8?.pattern === 'Varies by season').length}</div><div class="foot">${households.filter(r => r.answers.F8?.pattern).length} answered F8.</div></div></div><div class="insights-grid">${distribution('B10', 'Power-quality and reliability problems')}${distribution('B11', 'Supply predictability')}${distribution('E6', 'Essential household loads')}${distribution('E7', 'Emergency electricity needs')}${distribution('F5', 'Affordability stress')}${distribution('F9', 'Coping with low or irregular income')}${distribution('H8', 'Preferred benefit sharing')}${distribution('H10', 'Community ownership preferences')}${distribution('H11', 'Confidence in grievance handling')}${distribution('K1', 'Community-reported resources', 'community')}${distribution('L9', 'Preferred asset ownership', 'community')}${distribution('L13', 'Meaningful participation', 'community')}</div><section class="card" style="margin-top:22px"><div class="card-head"><div><h2>Tariff scenarios — responses by exact terms</h2><p class="card-note">Discussion only. Different amounts and thresholds are kept separate. ${groups.size} scenario/terms groups.</p></div></div><div class="insight-bars">${[...groups.values()].slice(0, 30).map(g => `<div class="insight-row"><strong>${esc(scenarioNames[g.i])}</strong><p>${esc(g.terms)}${g.kwh ? ' · first ' + esc(g.kwh) + ' kWh/month' : ''}</p><p>Yes ${g.Yes} · Depends ${g.Depends} · No ${g.No} · ${g.Yes + g.Depends + g.No} responses</p></div>`).join('') || '<p>No revised scenario responses recorded.</p>'}${groups.size > 30 ? '<p>Showing the first 30 groups. Export JSON for all responses.</p>' : ''}</div></section>`;
+ }
+-function collectView() { return originalCollectView() + (!state.draft ? `<div class="card settings-card"><h2>Revised survey & field protocol</h2><p>${esc(schema.guidance)}</p><button class="btn" data-action="survey-protocol">Read sampling & enumerator protocol</button></div>` : ''); }
+-async function startInterview(instrument) { const d = { id: crypto.randomUUID(), owner: state.user.id, version: schema.version, metadata: { municipality_province: '', language: '', replacement: 'No' }, photo_consent: '', audio_consent: '', instrument, community: state.user.community || '', respondent: '', consent: '', gps_consent: '', location: null, answers: {}, started_at: new Date().toISOString(), status: 'draft', step: 0 }; try { await saveLocal(d); state.draft = d; state.step = 0; render(); } catch { toast('Device storage is unavailable. Enable browser storage before collecting data.'); } }
++function originalReferenceCollectView() { return originalCollectView() + (!state.draft ? `<div class="card settings-card"><h2>Revised survey & field protocol</h2><p>${esc(schema.guidance)}</p><button class="btn" data-action="survey-protocol">Read sampling & enumerator protocol</button></div>` : ''); }
++function collectView(){const html=originalReferenceCollectView();return state.draft?html:html.replace('<div class="field-start">',referenceReadinessView(true)+'<div class="field-start">');}
++const referenceCodes={household:'HE',community:'CI',observation:'SO'};
++let referencePreparation=null;
++function assignmentReady(user=state.user){return user?.role==='enumerator'&&['community','municipality_province','language'].every(k=>typeof user[k]==='string'&&user[k].trim());}
++function referenceKey(user,instrument){return user.id+':'+instrument;}
++function referenceRemaining(row,user=state.user){return row?.status==='ready'&&row.user_id===user?.id?Math.max(0,row.end-row.next+1):0;}
++async function loadReferences(){if(!state.user)return;const uid=state.user.id;const rows=await storage('readonly',s=>s.getAll(),'allocations');if(state.user?.id===uid)state.references=rows.filter(r=>r.user_id===uid);}
++async function refreshAccountAssignment(){
++ const uid=state.user?.id;if(!uid||!navigator.onLine)return;
++ const result=await api('session');if(state.user?.id!==uid)return;
++ if(!result.user||result.user.id!==uid){state.csrf=null;throw Error('Sign in again to refresh your assignment and reserve more reference IDs.');}
++ state.user=result.user;state.csrf=result.csrf;localStorage.setItem('gridfield-user',JSON.stringify(state.user));
++}
++function pendingReservation(user,instrument){return new Promise((resolve,reject)=>{
++ const tx=db.transaction('allocations','readwrite'),store=tx.objectStore('allocations'),key=referenceKey(user,instrument);let value;
++ const request=store.get(key);request.onsuccess=()=>{
++  const existing=request.result;
++  if(referenceRemaining(existing,user)>0||existing?.status==='pending'){value=existing;return;}
++  let device=localStorage.getItem('gridfield-device-id');if(!device){device=crypto.randomUUID();localStorage.setItem('gridfield-device-id',device);}
++  value={key,user_id:user.id,instrument,device_id:device,request_id:crypto.randomUUID(),assignment_version:user.assignment_version,status:'pending'};store.put(value);
++ };
++ tx.oncomplete=()=>resolve(value);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
++});}
++function saveReservation(pending,grant){return new Promise((resolve,reject)=>{
++ const tx=db.transaction('allocations','readwrite'),store=tx.objectStore('allocations'),r=store.get(pending.key);
++ r.onsuccess=()=>{
++  const current=r.result;
++  if(!current||current.request_id!==pending.request_id)return;
++  // A second tab may already have consumed a number from this same response.
++  const next=current.status==='ready'&&current.id===grant.id?Math.max(current.next,grant.start):grant.start;
++  store.put({...pending,...grant,key:pending.key,user_id:pending.user_id,request_id:pending.request_id,status:'ready',next});
++ };
++ tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
++});}
++async function prepareReferences(refresh=true){
++ if(!state.user)return;const uid=state.user.id;
++ if(referencePreparation?.uid===uid)return referencePreparation.promise;
++ const promise=(async()=>{
++  state.reference_error='';
++  try{
++   if(refresh&&navigator.onLine)await refreshAccountAssignment();
++   if(state.user?.id!==uid)return;
++   await loadReferences();
++   if(!assignmentReady()||!navigator.onLine||!state.csrf)return;
++   for(const instrument of Object.keys(referenceCodes)){
++    if(state.user?.id!==uid)return;
++    const user=structuredClone(state.user),pending=await pendingReservation(user,instrument);
++    if(referenceRemaining(pending,user)>0)continue;
++    const result=await api('reference-ranges',{method:'POST',body:JSON.stringify({user_id:uid,instrument,device_id:pending.device_id,request_id:pending.request_id,assignment_version:pending.assignment_version})});
++    if(state.user?.id!==uid)return;
++    await saveReservation(pending,result.allocation);
++   }
++  }catch(e){if(state.user?.id===uid)state.reference_error=e.message;}
++  finally{if(state.user?.id===uid)await loadReferences();}
++ })();
++ referencePreparation={uid,promise};try{await promise;}finally{if(referencePreparation?.promise===promise)referencePreparation=null;}
++}
++function createNumberedInterview(user,instrument){return new Promise((resolve,reject)=>{
++ const tx=db.transaction(['surveys','allocations'],'readwrite'),store=tx.objectStore('allocations'),request=store.get(referenceKey(user,instrument));let created,error;
++ request.onsuccess=()=>{
++  const range=request.result;
++  if(referenceRemaining(range,user)<1){error=Error('No reserved '+referenceCodes[instrument]+' IDs remain on this device. Reconnect and prepare more IDs. Existing drafts are safe.');tx.abort();return;}
++  const number=range.next,assignment={community:user.community,municipality_province:user.municipality_province,language:user.language},time=new Date().toISOString();
++  created={id:crypto.randomUUID(),owner:user.id,version:schema.version,reference_mode:'allocated-v1',reference_allocation_id:range.id,reference_sequence:number,assignment_version:user.assignment_version,metadata:{municipality_province:assignment.municipality_province,language:assignment.language},photo_consent:'',audio_consent:'',instrument,community:assignment.community,respondent:range.username+'-'+referenceCodes[instrument]+'-'+String(number).padStart(3,'0'),consent:'',gps_consent:'',answers:{},started_at:time,updated_at:time,status:'draft',step:0};
++  range.next=number+1;store.put(range);tx.objectStore('surveys').put(created);
++ };
++ tx.oncomplete=()=>resolve({...created,location:null});tx.onerror=()=>reject(error||tx.error);tx.onabort=()=>reject(error||tx.error||Error('Could not save the reference ID.'));
++});}
++function referenceReadinessView(compact=false){
++ if(!state.user)return '';
++ if(state.user.role!=='enumerator')return '<div class="notice">Start field interviews using an enumerator account with an assigned barangay, municipality/province and language. Administrators configure these under Enumerators.</div>';
++ const assigned=assignmentReady();
++ if(compact)return `<div class="notice"><strong>${esc(state.user.community||'Barangay not configured')} · ${esc(state.user.municipality_province||'Municipality/province not configured')} · ${esc(state.user.language||'Language not configured')}</strong><br>${assigned?Object.entries(referenceCodes).map(([instrument,code])=>code+': '+referenceRemaining((state.references||[]).find(r=>r.instrument===instrument))+' IDs ready').join(' · '):'Ask the administrator to complete your assignment before starting new interviews.'}<br><button class="text-btn" data-action="prepare-references">Refresh assignment & prepare offline IDs</button>${state.reference_error?`<p class="error">${esc(state.reference_error)}</p>`:''}</div>`;
++ return `<div class="card settings-card"><h2>Assigned interview details</h2><p>Barangay: <strong>${esc(state.user.community||'Not configured')}</strong><br>Municipality / Province: <strong>${esc(state.user.municipality_province||'Not configured')}</strong><br>Interview language(s): <strong>${esc(state.user.language||'Not configured')}</strong></p><p class="card-note">The administrator manages these defaults. New interviews keep the assignment saved when they start; reconnect to receive later changes.</p>${!assigned?'<div class="notice">Ask the administrator to complete your account assignment before starting new interviews. Existing drafts remain available.</div>':`<h2 style="margin-top:22px">Offline reference IDs</h2><p>${Object.entries(referenceCodes).map(([instrument,code])=>{const range=(state.references||[]).find(r=>r.instrument===instrument);return code+': <strong>'+referenceRemaining(range)+'</strong> available on this device';}).join('<br>')}</p><p class="card-note">Each type has its own counter, such as ${esc(state.user.username)}-HE-001. Prepare this device online before fieldwork. Consumed numbers are not reused.</p>`}<button class="btn" data-action="prepare-references">${icon('sync')}Refresh assignment & prepare offline IDs</button>${state.reference_error?`<p class="error">${esc(state.reference_error)}</p>`:''}</div>`;
++}
++async function startInterview(instrument){
++ if(!referenceCodes[instrument])return;
++ await loadReferences();
++ const available=(state.references||[]).find(r=>r.instrument===instrument);
++ if(!assignmentReady()||referenceRemaining(available)<1)await prepareReferences(true);
++ if(!assignmentReady()){toast('Ask the administrator to set your barangay, municipality/province and interview language first.');render();return;}
++ try{const user=structuredClone(state.user),d=await createNumberedInterview(user,instrument);if(state.user?.id!==user.id)return;await getLocal();await loadReferences();state.draft=d;state.step=0;render();window.scrollTo(0,0);}
++ catch(e){toast(e.message||'Could not save the interview. Check device storage.');}
++}
+ function interviewSections() { return [{ id: '0', title: state.draft.instrument === 'observation' ? 'Site & authorization' : 'Identity & consent' }, ...activeSchema().sections.filter(s => s.instrument === state.draft.instrument), { id: 'R', title: 'Review & submit' }]; }
+ function originalInterviewView() { const d = state.draft, sections = interviewSections(), s = sections[state.step]; return heading(instrumentNames[d.instrument].toUpperCase(), `<button class="btn" data-action="save-exit">${icon('check')}Save & close</button>`) + `<div class="field-layout"><nav class="steps" aria-label="Interview sections">${sections.map((x, i) => `<button class="step ${i === state.step ? 'active' : ''}" data-step="${i}" ${d.consent !== 'Yes' && i > 0 && i !== sections.length - 1 ? 'disabled' : ''}><b>${x.id === '0' ? '1' : x.id === 'R' ? icon('check') : x.id}</b><span>${esc(x.title)}</span></button>`).join('')}</nav><div><section class="card survey-card"><div class="eyebrow">${state.step === 0 ? 'BEFORE WE BEGIN' : state.step === sections.length - 1 ? 'ONE LAST LOOK' : 'PART ' + s.id}</div><h2>${esc(s.title)}</h2><p class="card-note">${state.step === 0 ? 'Read the consent script exactly as written.' : state.step === sections.length - 1 ? 'Check the essentials, then send or queue this interview.' : 'Questions are optional. Leave an answer blank if the respondent skips it.'}</p><div id="questions">${state.step === 0 ? consentView() : state.step === sections.length - 1 ? reviewView() : s.questions.filter(q => !skipQuestion(q)).map(questionView).join('')}</div></section><div class="survey-nav"><button class="btn" data-action="back-step" ${state.step === 0 ? 'disabled' : ''}>← Back</button><span id="save-indicator">Saved on this device</span>${state.step === sections.length - 1 ? '<button class="btn primary" data-action="submit-survey">' + icon('check') + 'Finish interview</button>' : '<button class="btn primary" data-action="next-step">Continue ' + icon('arrow') + '</button>'}</div></div></div>`; }
+ function interviewView() { const sec = interviewSections()[state.step]; return originalInterviewView().replace('<div id="questions">', `<div class="notice">${esc(state.draft.version)}${sec.help ? ' · ' + esc(sec.help) : ''}</div><div id="questions">`); }
+ function skipQuestion(q) { return state.draft.instrument === 'household' && String(state.draft.answers.D1 || '').startsWith('No') && q.id.startsWith('D') && q.id !== 'D1'; }
+ function consentView() {
+-    const d = state.draft, obs = d.instrument === 'observation', v2 = revised(), meta = d.metadata || {};
+-    const field = (key, label, required = false) => `<div><label class="form-label" for="meta-${key}">${label}${required ? ' *' : ''}</label><input class="input" id="meta-${key}" data-interview-meta="${key}" value="${esc(meta[key] || '')}" maxlength="5000" ${required && d.consent !== 'No' ? 'required' : ''}></div>`;
++    const d = state.draft, obs = d.instrument === 'observation', v2 = revised(), meta = d.metadata || {}, assigned=d.reference_mode==='allocated-v1';
++    const field = (key, label, required = false) => `<div><label class="form-label" for="meta-${key}">${label}${required ? ' *' : ''}</label><input class="input" id="meta-${key}" data-interview-meta="${key}" value="${esc(meta[key] || '')}" maxlength="5000" ${required && d.consent !== 'No' ? 'required' : ''} ${assigned?'readonly':''}></div>`;
+     const choice = (key, label) => `<div class="question"><div class="q-label">${label} *</div><div class="choices">${['Yes', 'No'].map(v => `<label class="choice"><input type="radio" name="${key}" data-meta="${key}" value="${v}" ${d[key] === v ? 'checked' : ''}>${v}</label>`).join('')}</div></div>`;
+-    return `<div class="notice">${esc(activeSchema().version)} · ${v2 ? esc(schema.guidance) : 'Earlier questionnaire. Complete this existing interview under its original wording.'}</div><div class="form-grid"><div><label class="form-label" for="respondent">${obs ? 'Observation reference ID' : 'Respondent ID'} *</label><input class="input" id="respondent" data-meta="respondent" value="${esc(d.respondent)}" maxlength="150" required><p class="card-note">Use the coordinator’s respondent code, not a household name.</p></div><div><label class="form-label" for="community">Barangay / Sitio / Island *</label><input class="input" id="community" data-meta="community" value="${esc(d.community)}" maxlength="150" required></div>${v2 ? field('municipality_province', 'Municipality / Province', true) + field('language', 'Language used in interview', true) : ''}</div><p class="card-note">Enumerator: ${esc(state.user.name)} · Started: ${esc(fullDate(d.started_at))}</p>${obs ? '<div class="consent-script">Complete once per community. Record authorization and separate permissions before site GPS or any external media collection. The app records media consent but does not capture/upload photographs or audio.</div>' : `<div class="consent-script">${esc(activeSchema().consent)}</div>`}${choice('consent', obs ? 'Authorized to record this community site observation?' : 'Does the respondent agree to be interviewed?')}${d.consent === 'Yes' ? `${choice('gps_consent', obs ? 'Permission to record this site’s GPS location?' : 'Does the respondent agree that the dwelling location may be recorded by GPS?')}<p class="card-note">${v2 ? esc(schema.gps_notice) : 'Location capture requires separate permission.'}</p>${d.gps_consent === 'Yes' ? `<button class="btn" data-action="capture-gps">${icon('pin')}${d.location ? 'Update GPS location' : 'Capture GPS location'}</button><p class="card-note" id="gps-status">${d.location ? `${d.location.lat.toFixed(5)}, ${d.location.lng.toFixed(5)} · ±${Math.round(d.location.accuracy)} m` : 'Optional. Requires device permission and HTTPS (or localhost).'}</p>` : ''}${v2 ? choice('photo_consent', 'Does the respondent agree that photographs may be taken?') + choice('audio_consent', 'Does the respondent agree that the interview may be audio-recorded?') + '<p class="card-note">Record these permissions independently. Permission does not start a camera or recording. Do not take external photos or recordings without the relevant permission and your project’s approved process.</p>' : ''}` : ''}${d.consent === 'No' ? '<div class="notice">End the interview. No answers, GPS, sampling notes or media consents will be submitted. Only the reference, community, refusal and interview timestamps are retained.</div>' : ''}`;
++    return `<div class="notice">${esc(activeSchema().version)} · ${v2 ? esc(schema.guidance) : 'Earlier questionnaire. Complete this existing interview under its original wording.'}</div><div class="form-grid"><div><label class="form-label" for="respondent">${obs ? 'Observation reference ID' : 'Respondent ID'} *</label><input class="input" id="respondent" data-meta="respondent" value="${esc(d.respondent)}" maxlength="150" required ${assigned?'readonly':''}><p class="card-note">${assigned?'Automatically generated for your account and this survey type.':'Earlier draft: retains its original respondent code.'}</p></div><div><label class="form-label" for="community">Barangay / Sitio / Island *</label><input class="input" id="community" data-meta="community" value="${esc(d.community)}" maxlength="150" required ${assigned?'readonly':''}></div>${v2 ? field('municipality_province', 'Municipality / Province', true) + field('language', 'Assigned interview language(s)', true) : ''}</div><p class="card-note">Enumerator: ${esc(state.user.name)} · Started: ${esc(fullDate(d.started_at))}</p>${obs ? '<div class="consent-script">Complete once per community. Record authorization and separate permissions before site GPS or any external media collection. The app records media consent but does not capture/upload photographs or audio.</div>' : `<div class="consent-script">${esc(activeSchema().consent)}</div>`}${choice('consent', obs ? 'Authorized to record this community site observation?' : 'Does the respondent agree to be interviewed?')}${d.consent === 'Yes' ? `${choice('gps_consent', obs ? 'Permission to record this site’s GPS location?' : 'Does the respondent agree that the dwelling location may be recorded by GPS?')}<p class="card-note">${v2 ? esc(schema.gps_notice) : 'Location capture requires separate permission.'}</p>${d.gps_consent === 'Yes' ? `<button class="btn" data-action="capture-gps">${icon('pin')}${d.location ? 'Update GPS location' : 'Capture GPS location'}</button><p class="card-note" id="gps-status">${d.location ? `${d.location.lat.toFixed(5)}, ${d.location.lng.toFixed(5)} · ±${Math.round(d.location.accuracy)} m` : 'Optional. Requires device permission and HTTPS (or localhost).'}</p>` : ''}${v2 ? choice('photo_consent', 'Does the respondent agree that photographs may be taken?') + choice('audio_consent', 'Does the respondent agree that the interview may be audio-recorded?') + '<p class="card-note">Record these permissions independently. Permission does not start a camera or recording. Do not take external photos or recordings without the relevant permission and your project’s approved process.</p>' : ''}` : ''}${d.consent === 'No' ? '<div class="notice">End the interview. No answers, GPS, sampling notes or media consents will be submitted. Only the reference, community, refusal and interview timestamps are retained.</div>' : ''}`;
+ }
+ function cellInput(id, col, value, row = null, group = null) {
+     const attrs = `data-q="${id}" data-col="${col.id}" ${row !== null ? `data-row="${row}"` : ''} ${group !== null ? `data-group="${group}"` : ''}`;
+@@ -113,7 +196,8 @@ function originalReviewView() { const d = state.draft; return `<div class="detai
+ function reviewView() { return `<div class="detail-row"><span>Survey version</span><strong>${esc(state.draft.version)}</strong></div>` + (revised() ? `<div class="detail-row"><span>Photo / audio consent</span><strong>${esc(state.draft.photo_consent)} / ${esc(state.draft.audio_consent)}</strong></div>` : '') + originalReviewView(); }
+ function draftsView() { const local = state.local.sort((a, b) => b.updated_at.localeCompare(a.updated_at)); return heading('YOUR FIELDWORK', 'Every interview has a place.', 'Drafts and queued interviews are stored only on this device until synced.', `<button class="btn" data-action="sync-now">${icon('sync')}${state.syncing ? 'Syncing…' : 'Sync now'}</button><button class="btn primary" data-view="collect">${icon('plus')}New interview</button>`) + `<div class="section-head"><h2>On this device · ${local.length}</h2></div><div class="draft-list">${local.map(d => `<div class="draft-item"><div><strong>${esc(d.respondent || 'Untitled interview')} <span class="pill ${d.status === 'queued' ? 'pending' : 'neutral'}">${d.status === 'queued' ? 'Waiting to sync' : 'Draft'}</span></strong><p>${esc(instrumentNames[d.instrument])} · ${esc(d.community || 'Community not set')} · ${relative(d.updated_at)}</p>${d.sync_error ? `<p class="critical">${esc(d.sync_error)}</p>` : ''}</div><div class="actions"><button class="btn" data-resume="${d.id}">${d.status === 'queued' ? 'Review & edit' : 'Continue'} ${icon('arrow')}</button><button class="icon-btn" data-delete="${d.id}" aria-label="Delete local ${esc(d.respondent || 'draft')}">${icon('close')}</button></div></div>`).join('') || '<div class="card empty">No local drafts or queued interviews.<br>Your next conversation starts in Field collection.</div>'}</div><div class="section-head" style="margin-top:30px"><h2>Synced interviews</h2><button class="text-btn" data-action="refresh">Refresh ${icon('sync')}</button></div><div class="draft-list">${(state.mySurveys || []).slice(0, 30).map(s => `<div class="draft-item"><div><strong>${esc(s.respondent)} <span class="pill">${icon('check')}Synced</span></strong><p>${esc(s.community)} · ${esc(instrumentNames[s.instrument])} · ${date(s.completed_at)} · ${esc(s.version || 'Earlier questionnaire')}</p></div><span class="pill ${s.review}">${esc(s.review)}</span></div>`).join('') || '<div class="card empty">No synced interview history loaded. Connect to refresh.</div>'}</div>`; }
+ function originalSettingsView() { return heading('WORKSPACE & DEVICE', 'Ready for the field.', 'Keep this device prepared and choose what you share.') + `<div class="card settings-card"><h2>Device readiness</h2><p>${icon('wifi')} Connection: ${state.online ? 'online' : 'offline'}<br>${icon('check')} Offline app shell: ${state.ready ? 'ready' : 'not confirmed — connect and reload to prepare'}<br>${icon('survey')} Local interviews: ${state.local.length} (${state.local.filter(d => d.status === 'queued').length} queued)<br>Survey version: ${esc(schema.version)}</p><button class="btn" data-action="${installEvent ? 'install' : 'offline-help'}">${icon('download')}${installEvent ? 'Install Gridfield' : 'How to install'}</button><button class="btn" data-action="sync-now" style="margin-left:8px">${icon('sync')}Sync now</button></div><div class="card settings-card"><h2>Enumerator location sharing</h2><p>When enabled, a check-in requests your device location while this app is open and sends the last known point to administrators. Sharing stops when the app is closed. Device GPS can be unavailable or imprecise. Respondent dwelling GPS always needs separate consent.</p><label class="inline-check" style="margin-top:17px"><input id="sharing-toggle" type="checkbox" ${state.sharing ? 'checked' : ''}>Share my location with the field coordinator during check-ins</label><p id="sharing-status" style="margin-top:12px">${state.location ? `Last device fix: ±${Math.round(state.location.accuracy)} m` : 'No location captured this session.'}</p><button class="btn" data-action="checkin">${icon('pin')}Check in now</button></div><div class="card settings-card"><h2>Data & privacy</h2><p>Only administrators can view team submissions and exports. Enumerators can see their own synced interview summaries. Offline drafts and queued answers are stored in this browser, without application-level encryption. Use a device screen lock and avoid shared browser profiles. Clearing browser data removes unsynced interviews. Sign out locks the workspace but retains local interviews for the same account.</p><button class="btn danger" data-action="logout">${icon('logout')}Sign out of this device</button></div>${state.user.role === 'admin' ? '<div class="card settings-card"><h2>Team management</h2><p>Provision accounts, change community assignments and targets, reset passwords, or disable access from the team directory. Disabling an account prevents future sync; contact the enumerator first if they have unsynced work.</p><button class="btn" data-view="enumerators">' + icon('users') + 'Manage enumerators</button></div>' : ''}`; }
+-function settingsView() { return originalSettingsView() + `<div class="card settings-card"><h2>Survey codebook</h2><p>Recall periods, units, allowed response codes, and versioned question definitions. GPS is stored separately; standard exports contain approximate coordinates only.</p><a class="btn" href="/static/codebook.csv" download>Download CSV codebook</a> <a class="btn" href="/static/codebook.json" download>Download JSON codebook</a></div>`; }
++function originalReferenceSettingsView() { return originalSettingsView() + `<div class="card settings-card"><h2>Survey codebook</h2><p>Recall periods, units, allowed response codes, and versioned question definitions. GPS is stored separately; standard exports contain approximate coordinates only.</p><a class="btn" href="/static/codebook.csv" download>Download CSV codebook</a> <a class="btn" href="/static/codebook.json" download>Download JSON codebook</a></div>`; }
++function settingsView(){return originalReferenceSettingsView()+referenceReadinessView();}
+ let saveChain = Promise.resolve();
+ function persistDraft() { if (!state.draft) return Promise.resolve(); const copy = structuredClone(state.draft); saveChain = saveChain.catch(() => { }).then(async () => { await saveLocal(copy); const el = $('#save-indicator'); if (el) el.textContent = 'Saved on this device'; }).catch(e => { const el = $('#save-indicator'); if (el) el.textContent = 'Save failed — keep app open'; toast('Device storage failed. Do not close this app; free storage and try again.'); throw e; }); return saveChain; }
+ function bindView() {
+@@ -127,6 +211,7 @@ function bindView() {
+ }
+ async function recordInput(el) {
+     const d = state.draft; if (!d) return; let rerender = false;
++    if(d.reference_mode==='allocated-v1'&&(['respondent','community'].includes(el.dataset.meta)||['municipality_province','language'].includes(el.dataset.interviewMeta)))return;
+     if (el.dataset.interviewMeta) { d.metadata = d.metadata || {}; d.metadata[el.dataset.interviewMeta] = el.value; await persistDraft(); return; }
+     if (el.dataset.group !== undefined) { const g = d.answers[el.dataset.q][Number(el.dataset.group)]; if (el.hasAttribute('data-facility-name')) g.name = el.value; else g.rows[Number(el.dataset.row)][el.dataset.col] = el.value; await persistDraft(); return; }
+ 
+@@ -153,9 +238,9 @@ function validateAll(d) {
+ async function finishInterview() { if (!validateIdentity()) return; if (!$('#review-confirm')?.checked) { toast('Confirm that you have checked the interview.'); return; } try { if (state.draft.consent === 'Yes') validateAll(state.draft); } catch (e) { toast(e.message); return; } const button = document.querySelector('[data-action="submit-survey"]'); if (button) button.disabled = true; try { const d = state.draft; if (d.consent === 'No') { d.answers = {}; d.location = null; } d.status = 'queued'; d.completed_at = new Date().toISOString(); delete d.sync_error; await persistDraft(); state.draft = null; state.view = 'drafts'; render(); toast('Interview saved to the sync queue.'); await syncQueue(); } catch (e) { toast(e.message); if (button) button.disabled = false; } }
+ async function syncQueue() { if (state.syncing || !state.user || !navigator.onLine || !state.csrf) return; state.syncing = true; let sent = 0, failed = 0, removed = 0; try { await saveChain.catch(() => { }); await getLocal(); for (const d of [...state.local].filter(d => d.status === 'queued')) { try { const result = await api('surveys', { method: 'POST', body: JSON.stringify(d) }); await deleteLocal(d.id); if (result.deleted) removed++; else sent++; } catch (e) { d.sync_error = e.message; await saveLocal(d); failed++; if (e.status === 401 || e.status === 403 || !state.online) break; } } if (sent || removed) { await loadData(); toast([sent ? `${sent} interview${sent > 1 ? 's' : ''} synced successfully.` : '', removed ? `${removed} interview${removed > 1 ? 's were' : ' was'} removed from the queue because an administrator deleted ${removed > 1 ? 'them' : 'it'}.` : ''].filter(Boolean).join(' ')); } else if (failed) toast('Some interviews need attention. Open My interviews to review.'); } finally { state.syncing = false; if (state.view === 'drafts' && !$('#modal').open) render(); } const queue = state.local.filter(d => d.status === 'queued'); if (queue.length && 'serviceWorker' in navigator) { try { const r = await navigator.serviceWorker.ready; await r.sync?.register('gridfield-sync'); } catch { } } }
+ function gps() { return new Promise((resolve, reject) => { if (!navigator.geolocation) { reject(Error('Geolocation is not available on this device.')); return; } navigator.geolocation.getCurrentPosition(p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }), e => reject(Error(e.code === 1 ? 'Location permission was denied. You can continue without GPS.' : 'A location fix is unavailable. Try outdoors or continue without GPS.')), { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }); }); }
+-async function checkin(show = false) { if (!state.user || !navigator.onLine || !state.csrf) return; let loc = null; if (state.sharing) { try { loc = await gps(); state.location = loc; } catch (e) { if (show) toast(e.message); } } try { await api('checkin', { method: 'POST', body: JSON.stringify({ location: loc }) }); if (show) toast(loc ? 'Check-in and location shared.' : 'Check-in sent without a location.'); } catch (e) { if (show) toast(e.message); } }
++async function checkin(show = false) { if (!state.user || !navigator.onLine || !state.csrf) return; let loc = null; if (state.sharing) { try { loc = await gps(); state.location = loc; } catch (e) { if (show) toast(e.message); } } try { const result=await api('checkin', { method: 'POST', body: JSON.stringify({ location: loc }) }); if(result.user&&state.user?.id===result.user.id){state.user=result.user;localStorage.setItem('gridfield-user',JSON.stringify(state.user));} if (show) toast(loc ? 'Check-in and location shared.' : 'Check-in sent without a location.'); } catch (e) { if (show) toast(e.message); } }
+ function modal(title, body, footer = '') { const el = $('#modal'); el.innerHTML = `<div class="modal-head"><h2>${title}</h2><button class="icon-btn" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body">${body}</div>${footer ? `<div class="modal-foot">${footer}</div>` : ''}`; if (!el.open) el.showModal(); }
+-function userModal(id = null) { const u = id ? state.data.users.find(u => u.id === id) : null; modal(u ? 'Manage enumerator' : 'A new voice in the field', `<p class="subtitle">${u ? 'Update the assignment, target, or account access.' : 'Create a field account and share its credentials directly with the enumerator.'}</p><form id="user-form"><div class="form-grid">${u ? '' : `<div><label class="form-label" for="enum-name">Full name</label><input class="input" id="enum-name" name="name" required maxlength="100" placeholder="e.g. Maria Santos"></div><div><label class="form-label" for="enum-username">Username</label><input class="input" id="enum-username" name="username" required pattern="[A-Za-z0-9._-]+" maxlength="60" autocomplete="off"></div>`}<div><label class="form-label" for="enum-community">Assigned community</label><input class="input" id="enum-community" name="community" maxlength="150" value="${esc(u?.community || '')}"></div><div><label class="form-label" for="enum-target">Interview target</label><input class="input" id="enum-target" name="target" type="number" min="0" max="100000" required value="${u?.target || 30}"></div><div class="span2"><label class="form-label" for="enum-password">${u ? 'New password (leave blank to keep current)' : 'Temporary password · at least 12 characters'}</label><input class="input" id="enum-password" name="password" type="password" minlength="12" ${u ? '' : 'required'} autocomplete="new-password"></div>${u ? `<div class="span2" style="margin-top:20px"><label class="inline-check"><input name="active" type="checkbox" ${u.active ? 'checked' : ''}>Account enabled · can sign in and sync interviews</label><p class="card-note">Make sure unsynced work has been collected before disabling an account.</p></div>` : ''}</div><p id="user-error" class="error" role="alert"></p><button class="btn primary" type="submit" style="margin-top:23px">${icon('check')}${u ? 'Save changes' : 'Create enumerator'}</button></form>`); $('#user-form').onsubmit = async e => { e.preventDefault(); const button = e.target.querySelector('button'); button.disabled = true; const d = Object.fromEntries(new FormData(e.target)); if (u) d.active = e.target.elements.active.checked; try { await api(u ? 'users/' + u.id : 'users', { method: u ? 'PATCH' : 'POST', body: JSON.stringify(d) }); $('#modal').close(); await loadData(); render(); toast(u ? 'Enumerator updated.' : 'Enumerator account created.'); } catch (err) { $('#user-error').textContent = err.message; button.disabled = false; } }; }
++function userModal(id = null) { const u = id ? state.data.users.find(u => u.id === id) : null; modal(u ? 'Manage enumerator' : 'A new voice in the field', `<p class="subtitle">${u ? 'Update barangay, municipality/province, language, target or account access. Devices receive new defaults after reconnecting and refreshing; existing interviews retain their saved details.' : 'Create a field account and share its credentials directly with the enumerator.'}</p><form id="user-form"><div class="form-grid">${u ? '' : `<div><label class="form-label" for="enum-name">Full name</label><input class="input" id="enum-name" name="name" required maxlength="100" placeholder="e.g. Maria Santos"></div><div><label class="form-label" for="enum-username">Username</label><input class="input" id="enum-username" name="username" required pattern="[A-Za-z0-9._-]+" maxlength="60" autocomplete="off"></div>`}<div><label class="form-label" for="enum-community">Barangay *</label><input class="input" id="enum-community" name="community" maxlength="150" value="${esc(u?.community || '')}" required></div><div><label class="form-label" for="enum-municipality">Municipality / Province *</label><input class="input" id="enum-municipality" name="municipality_province" maxlength="150" value="${esc(u?.municipality_province||'')}" required></div><div><label class="form-label" for="enum-language">Interview language(s) *</label><input class="input" id="enum-language" name="language" maxlength="150" value="${esc(u?.language||'')}" placeholder="e.g. Cebuano" required></div><div><label class="form-label" for="enum-target">Interview target</label><input class="input" id="enum-target" name="target" type="number" min="0" max="100000" required value="${u?.target ?? 30}"></div><div class="span2"><label class="form-label" for="enum-password">${u ? 'New password (leave blank to keep current)' : 'Temporary password · at least 12 characters'}</label><input class="input" id="enum-password" name="password" type="password" minlength="12" ${u ? '' : 'required'} autocomplete="new-password"></div>${u ? `<div class="span2" style="margin-top:20px"><label class="inline-check"><input name="active" type="checkbox" ${u.active ? 'checked' : ''}>Account enabled · can sign in and sync interviews</label><p class="card-note">Make sure unsynced work has been collected before disabling an account.</p></div>` : ''}</div><p id="user-error" class="error" role="alert"></p><button class="btn primary" type="submit" style="margin-top:23px">${icon('check')}${u ? 'Save changes' : 'Create enumerator'}</button></form>`); $('#user-form').onsubmit = async e => { e.preventDefault(); const button = e.target.querySelector('button'); button.disabled = true; const d = Object.fromEntries(new FormData(e.target)); if (u) d.active = e.target.elements.active.checked; try { await api(u ? 'users/' + u.id : 'users', { method: u ? 'PATCH' : 'POST', body: JSON.stringify(d) }); $('#modal').close(); await loadData(); render(); toast(u ? 'Enumerator updated.' : 'Enumerator account created.'); } catch (err) { $('#user-error').textContent = err.message; button.disabled = false; } }; }
+ function readableAnswer(q, v) { if (q?.type === 'repeat_table' && Array.isArray(v)) return v.map(g => g.name + '\n' + readableAnswer({ ...q, type: 'table' }, g.rows)).join('\n\n'); if (q?.type === 'table' && Array.isArray(v)) return v.map((r, i) => hasAnswer(r) ? `${q.rows[i]}: ${q.columns.filter(c => hasAnswer(r[c.id])).map(c => c.label + ' = ' + r[c.id]).join(' · ')}` : '').filter(Boolean).join('\n'); if (q?.type === 'fields' && typeof v === 'object') return q.fields.filter(f => hasAnswer(v[f.id])).map(f => f.label + ': ' + v[f.id]).join('\n'); return Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v); }
+ function surveyModal(id) { const s = state.data?.surveys.find(s => s.id === id); if (!s) return; const qs = Object.fromEntries(schemaFor(s).sections.flatMap(x => x.questions).map(q => [q.id, q])); modal('Interview · ' + esc(s.respondent), `<span class="pill ${s.review}">${esc(s.review)}</span>${[['Instrument', instrumentNames[s.instrument]], ['Community', s.community], ['Enumerator', s.enumerator], ['Consent', s.consent], ['Survey version', s.version], ['Photo consent', s.photo_consent || 'Not asked'], ['Audio consent', s.audio_consent || 'Not asked'], ['Interview metadata', JSON.stringify(s.metadata || {})], ['GPS consent', s.gps_consent], ['Completed', fullDate(s.completed_at)], ['Received by server', fullDate(s.received_at)], ['Approximate location', s.coarse_location ? `${s.coarse_location.lat}, ${s.coarse_location.lng} · approximate 0.01° grid` : 'Not recorded']].map(([a, b]) => `<div class="detail-row"><span>${a}</span><strong>${esc(b)}</strong></div>`).join('')}${s.has_location ? `<button class="btn" data-exact-gps="${s.id}">View restricted exact GPS</button><p class="card-note" id="restricted-gps"></p>` : ''}<h3 style="margin-top:25px;font-size:14px">Recorded answers</h3>${Object.entries(s.answers).filter(([, v]) => hasAnswer(v)).map(([k, v]) => `<div class="answer-detail"><strong>${esc(k)} · ${esc(qs[k]?.label || (k.endsWith('_details') ? 'Additional details' : ''))}</strong><pre>${esc(readableAnswer(qs[k], v))}</pre></div>`).join('') || '<p class="subtitle">No answers recorded.</p>'}`, `<button class="btn danger" data-delete-submission="${s.id}">Delete interview</button><button class="btn" data-review-id="${s.id}" data-review="pending">Pending</button><button class="btn danger" data-review-id="${s.id}" data-review="flagged">Flag for follow-up</button><button class="btn primary" data-review-id="${s.id}" data-review="verified">${icon('check')}Verify interview</button>`); }
+ function deleteSubmissionModal(id) {
+@@ -178,10 +263,10 @@ function deleteSubmissionModal(id) {
+ }
+ function exportModal() { modal('Take the data further', `<p class="subtitle">Export all synced interviews in this workspace. Exports include survey versions, respondent codes, answers, separate consent choices, interview metadata, and approximate GPS locations only. Exact dwelling GPS is restricted to project-team administrators and excluded from exports. Store and share them with the same care as the survey records.</p><div class="notice" style="margin-top:20px">Dashboard filters do not limit these exports. Unsynced interviews on devices are not included.</div>`, `<a class="btn" href="/api/export?format=json" download>${icon('download')}JSON + survey schema</a><a class="btn primary" href="/api/export" download>${icon('download')}Download CSV</a>`); }
+ async function signOut() { await saveChain.catch(() => { }); if (state.draft) { try { await persistDraft(); } catch { return; } } if (!navigator.onLine) { toast('Reconnect to sign out of the server session. You can lock this device now.'); modal('Lock this device?', `<p class="subtitle">You are offline. Locking removes the remembered account from this browser. The server session will be closed when this device reconnects. Drafts stay on this device for the same account.</p>`, `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="lock-offline">Lock device</button>`); return; } try { await api('logout', { method: 'POST' }); finishLogout(); } catch (e) { if (e.status === 401) finishLogout(); else toast(e.message); } }
+-function finishLogout() { clearInterval(refreshTimer); localStorage.removeItem('gridfield-user'); state.user = null; state.csrf = null; state.draft = null; state.data = null; state.mySurveys = []; state.location = null; state.sharing = false; state.local = []; $('#modal').close(); loginScreen(); }
++function finishLogout() { clearInterval(refreshTimer); localStorage.removeItem('gridfield-user'); state.user = null; state.csrf = null; state.draft = null; state.data = null; state.mySurveys = []; state.location = null; state.sharing = false; state.local = [];state.references=[];state.reference_error=''; $('#modal').close(); loginScreen(); }
+ async function action(name) {
+     switch (name) {
+-        case 'survey-protocol': modal('Sampling & enumerator protocol', `<p class="notice">${esc(schema.guidance)}</p>${schema.protocol.map(x => `<p class="subtitle">${esc(x)}</p>`).join('')}`); break; case 'menu': $('.sidebar').classList.toggle('open'); break;
++        case 'prepare-references': await prepareReferences(true);render();toast(state.reference_error||(!assignmentReady()?'Account assignment is incomplete. Contact the administrator.':!navigator.onLine?'Offline: showing the IDs already reserved on this device.':'Assignment and available offline reference IDs refreshed.'));break;case 'survey-protocol': modal('Sampling & enumerator protocol', `<p class="notice">${esc(schema.guidance)}</p>${schema.protocol.map(x => `<p class="subtitle">${esc(x)}</p>`).join('')}`); break; case 'menu': $('.sidebar').classList.toggle('open'); break;
+         case 'close-modal': $('#modal').close(); break;
+         case 'demo-admin': await signIn('admin', 'MicrogridDemo!2026'); break;
+         case 'demo-field': await signIn('maria', 'FieldworkDemo!2026'); break;
+@@ -215,15 +300,15 @@ document.addEventListener('click', async e => {
+     } catch (err) { toast(err.message || 'Something went wrong. Try again.'); }
+ });
+ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvent = e; });
+-window.addEventListener('online', async () => { state.online = true; updateConnection(); await completePendingLogout(); if (state.user) { try { const s = await api('session'); if (s.user?.id === state.user.id) state.csrf = s.csrf; else state.csrf = null; } catch { } await syncQueue(); await checkin(); await loadData(); if (!state.draft && !$('#modal').open) render(); } });
++window.addEventListener('online', async () => { state.online = true; updateConnection(); await completePendingLogout(); if (state.user) { try { const s = await api('session'); if (s.user?.id === state.user.id){state.csrf=s.csrf;state.user=s.user;localStorage.setItem('gridfield-user',JSON.stringify(state.user));} else state.csrf = null; } catch { } await syncQueue(); await checkin(); await loadData(); await prepareReferences(false);if (!state.draft && !$('#modal').open) render(); } });
+ window.addEventListener('offline', () => { state.online = false; updateConnection(); });
+ window.addEventListener('beforeunload', e => { if (state.draft && $('#save-indicator')?.textContent !== 'Saved on this device') { e.preventDefault(); e.returnValue = ''; } });
+ async function completePendingLogout() { if (!localStorage.getItem('gridfield-pending-logout')) return; const s = await api('session'); if (s.user) { const old = state.csrf; state.csrf = s.csrf; await api('logout', { method: 'POST' }); state.csrf = old; } localStorage.removeItem('gridfield-pending-logout'); }
+ async function boot() {
+     try {
+-        db = await openDB(); schema = await fetch('/static/survey.json').then(r => r.json()); legacySchema = await fetch('/static/survey-legacy.json').then(r => r.json()); if ('serviceWorker' in navigator) { navigator.serviceWorker.addEventListener('message', e => { if (e.data.type === 'sync') syncQueue(); }); try { await navigator.serviceWorker.register('/sw.js'); navigator.serviceWorker.ready.then(async () => { const cache = await caches.open('gridfield-shell-revised-v5'); state.ready = !!(await cache.match('/static/survey.json')); if (state.view === 'collect' && !state.draft && state.user) render(); }); } catch { } }
++        db = await openDB(); schema = await fetch('/static/survey.json').then(r => r.json()); legacySchema = await fetch('/static/survey-legacy.json').then(r => r.json()); if ('serviceWorker' in navigator) { navigator.serviceWorker.addEventListener('message', e => { if (e.data.type === 'sync') syncQueue(); }); try { await navigator.serviceWorker.register('/sw.js'); navigator.serviceWorker.ready.then(async () => { const cache = await caches.open('gridfield-shell-enumerator-refs-v1'); state.ready = !!(await cache.match('/static/survey.json')); if (state.view === 'collect' && !state.draft && state.user) render(); }); } catch { } }
+         try { await completePendingLogout(); const s = await api('session'); Object.assign(state, s); if (s.user) localStorage.setItem('gridfield-user', JSON.stringify(s.user)); else localStorage.removeItem('gridfield-user'); } catch { const saved = localStorage.getItem('gridfield-user'); if (saved && !localStorage.getItem('gridfield-pending-logout')) state.user = JSON.parse(saved); state.csrf = null; }
+-        if (state.user) { state.view = state.user.role === 'admin' ? 'overview' : 'collect'; state.sharing = localStorage.getItem('gridfield-sharing-' + state.user.id) === 'true'; await getLocal(); await loadData(); render(); startTimers(); await syncQueue(); await checkin(); } else loginScreen();
++        if (state.user) { state.view = state.user.role === 'admin' ? 'overview' : 'collect'; state.sharing = localStorage.getItem('gridfield-sharing-' + state.user.id) === 'true'; await getLocal(); await loadData(); await prepareReferences(false); render(); startTimers(); await syncQueue(); await checkin(); } else loginScreen();
+     } catch (e) { app.innerHTML = `<div class="boot"><h1>Gridfield needs device storage.</h1><p class="subtitle">Enable browser storage and reconnect to finish setting up the app.<br>${esc(e.message)}</p><button class="btn" id="reload">Try again</button></div>`; $('#reload').onclick = () => location.reload(); }
+ }
+ boot();
+diff --git a/static/codebook.csv b/static/codebook.csv
+index f1fde18..c1f535b 100644
+--- a/static/codebook.csv
++++ b/static/codebook.csv
+@@ -1,8 +1,8 @@
+ ﻿version,instrument,part,id,question,type,options,fields_or_columns,notes
+-gridfield-shell-revised-v5,all,metadata,respondent,Coordinator-assigned pseudonymous respondent code,metadata,,,
+-gridfield-shell-revised-v5,all,metadata,community,Barangay / Sitio / Island,metadata,,,
+-gridfield-shell-revised-v5,all,metadata,municipality_province,Municipality / Province,metadata,,,
+-gridfield-shell-revised-v5,all,metadata,language,Language used in interview,metadata,,,
++gridfield-shell-revised-v5,all,metadata,respondent,For new interviews: automatically generated username-HE/CI/SO-sequence (minimum 3 digits). Existing manual references remain unchanged.,metadata,,,
++gridfield-shell-revised-v5,all,metadata,community,"Administrator-assigned barangay, saved when the interview starts.",metadata,,,
++gridfield-shell-revised-v5,all,metadata,municipality_province,"Administrator-assigned municipality/province, saved when the interview starts.",metadata,,,
++gridfield-shell-revised-v5,all,metadata,language,"Administrator-assigned interview language(s), saved when the interview starts; not a verified translation or independent check of the language actually spoken.",metadata,,,
+ gridfield-shell-revised-v5,all,metadata,started_at,Device timestamp with timezone; submitting enumerator is assigned from the authenticated account,metadata,,,
+ gridfield-shell-revised-v5,all,metadata,consent,Interview/site authorization Yes/No,metadata,,,
+ gridfield-shell-revised-v5,all,metadata,gps_consent,Separate GPS permission Yes/No,metadata,,,
+@@ -15,6 +15,10 @@ gridfield-shell-revised-v5,all,metadata,replacement,Was this a replacement of a
+ gridfield-shell-revised-v5,all,metadata,replacement_reason,Required when replacement=Yes,metadata,,,
+ gridfield-shell-revised-v5,all,metadata,field_notes,Representation/validation references and notes,metadata,,,
+ gridfield-shell-revised-v5,all,metadata,version,Questionnaire version; earlier interviews are not relabeled,metadata,,,
++gridfield-shell-revised-v5,all,metadata,reference_mode,allocated-v1 for newly generated references; manual for existing/older interviews.,metadata,,,
++gridfield-shell-revised-v5,all,metadata,reference_sequence,"Per-enumerator, per-instrument number consumed when a new interview starts; not reused after local deletion or server deletion.",metadata,,,
++gridfield-shell-revised-v5,all,metadata,reference_allocation_id,Server reservation that permits this phone to allocate numbers offline.,metadata,,,
++gridfield-shell-revised-v5,all,metadata,assignment_version,Administrator assignment snapshot used when this interview started; separate from questionnaire version and offline app-cache version.,metadata,,,
+ gridfield-shell-revised-v5,household,A,A1,Sex,select,"[""Female"", ""Male"", ""Prefer not to say""]",[],
+ gridfield-shell-revised-v5,household,A,A2,Age,select,"[""18–24"", ""25–34"", ""35–49"", ""50–64"", ""65 and above""]",[],
+ gridfield-shell-revised-v5,household,A,A3,Number of household members,fields,[],"[{""id"": ""members"", ""label"": ""Total household members"", ""type"": ""number"", ""integer"": true}, {""id"": ""under5"", ""label"": ""Under 5 years"", ""type"": ""number"", ""integer"": true}, {""id"": ""over60"", ""label"": ""60 years and above"", ""type"": ""number"", ""integer"": true}, {""id"": ""equipment"", ""label"": ""Members with disability or needing electrical equipment"", ""type"": ""number"", ""integer"": true}]", 
+diff --git a/static/codebook.json b/static/codebook.json
+index d420b6a..79b6e23 100644
+--- a/static/codebook.json
++++ b/static/codebook.json
+@@ -1875,10 +1875,10 @@
+     }
+   ],
+   "metadata": {
+-    "respondent": "Coordinator-assigned pseudonymous respondent code",
+-    "community": "Barangay / Sitio / Island",
+-    "municipality_province": "Municipality / Province",
+-    "language": "Language used in interview",
++    "respondent": "For new interviews: automatically generated username-HE/CI/SO-sequence (minimum 3 digits). Existing manual references remain unchanged.",
++    "community": "Administrator-assigned barangay, saved when the interview starts.",
++    "municipality_province": "Administrator-assigned municipality/province, saved when the interview starts.",
++    "language": "Administrator-assigned interview language(s), saved when the interview starts; not a verified translation or independent check of the language actually spoken.",
+     "started_at": "Device timestamp with timezone; submitting enumerator is assigned from the authenticated account",
+     "consent": "Interview/site authorization Yes/No",
+     "gps_consent": "Separate GPS permission Yes/No",
+@@ -1890,7 +1890,11 @@
+     "replacement": "Was this a replacement of a selected household? Yes/No",
+     "replacement_reason": "Required when replacement=Yes",
+     "field_notes": "Representation/validation references and notes",
+-    "version": "Questionnaire version; earlier interviews are not relabeled"
++    "version": "Questionnaire version; earlier interviews are not relabeled",
++    "reference_mode": "allocated-v1 for newly generated references; manual for existing/older interviews.",
++    "reference_sequence": "Per-enumerator, per-instrument number consumed when a new interview starts; not reused after local deletion or server deletion.",
++    "reference_allocation_id": "Server reservation that permits this phone to allocate numbers offline.",
++    "assignment_version": "Administrator assignment snapshot used when this interview started; separate from questionnaire version and offline app-cache version."
+   },
+   "privacy": "Exact GPS is stored separately and available only through an administrator endpoint. Standard exports use a 0.01-degree approximate grid. Names/contact details in key-informant answers remain confidential research data."
+ }
+\ No newline at end of file
+diff --git a/static/style.css b/static/style.css
+index 0bf747c..819160f 100644
+--- a/static/style.css
++++ b/static/style.css
+@@ -11,3 +11,5 @@
+ .facility-group{padding:18px;margin:18px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcf8}.facility-group .btn{margin-top:12px}.question .table-wrap input,.question .table-wrap select{min-width:110px}.q-help{white-space:normal}
+ 
+ .field-layout>div,.survey-card,.question{min-width:0}
++
++.input[readonly]{background:#f1f4ed;color:#52674c;cursor:default}
+diff --git a/static/sw.js b/static/sw.js
+index 0da4b42..773871b 100644
+--- a/static/sw.js
++++ b/static/sw.js
+@@ -1,5 +1,5 @@
+-const CACHE = 'gridfield-shell-revised-v5';
+-const ASSETS = ['/', '/static/style.css', '/static/app.js', '/static/survey.json', '/static/icon.svg', '/static/icon-192.png', '/static/icon-512.png', '/static/manifest.webmanifest'];
++const CACHE = 'gridfield-shell-enumerator-refs-v1';
++const ASSETS = ['/', '/static/style.css', '/static/app.js', '/static/survey.json', '/static/survey-legacy.json', '/static/codebook.json', '/static/codebook.csv', '/static/icon.svg', '/static/icon-192.png', '/static/icon-512.png', '/static/manifest.webmanifest'];
+ self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
+ self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+ self.addEventListener('fetch', e => {
+diff --git a/tests/browser_revised.py b/tests/browser_revised.py
+index ab0a1dd..c4d9ec0 100644
+--- a/tests/browser_revised.py
++++ b/tests/browser_revised.py
+@@ -21,15 +21,15 @@ try:
+   def start(kind,reference,gps='No',photo='No'):
+    if page.locator('[data-start]').count()==0:
+     page.locator('[data-action="menu"]').click();page.locator('[data-view="collect"]').first.click()
+-   page.locator('[data-start="'+kind+'"]').click();page.locator('#respondent').fill(reference);page.locator('#meta-municipality_province').fill('Davao / Davao del Sur');page.locator('#meta-language').fill('Cebuano');page.locator('input[name="consent"][value="Yes"]').check();page.locator('input[name="gps_consent"][value="'+gps+'"]').check();page.locator('input[name="photo_consent"][value="'+photo+'"]').check();page.locator('input[name="audio_consent"][value="No"]').check()
++   page.locator('[data-start="'+kind+'"]').click();assert page.locator('#respondent').input_value().startswith('maria-');assert page.locator('#meta-municipality_province').input_value()=='Davao City / Davao del Sur';assert page.locator('#meta-language').input_value()=='Cebuano';page.locator('input[name="consent"][value="Yes"]').check();page.locator('input[name="gps_consent"][value="'+gps+'"]').check();page.locator('input[name="photo_consent"][value="'+photo+'"]').check();page.locator('input[name="audio_consent"][value="No"]').check()
+   def finish():
+-   page.locator('[data-step]').last.click();page.locator('#review-confirm').check();page.get_by_role('button',name='Finish interview').click();page.wait_for_function("() => !document.querySelector('[data-resume]')")
++   page.locator('[data-step]').last.click();page.locator('#review-confirm').check();page.get_by_role('button',name='Finish interview').click();page.wait_for_function("() => state.view==='drafts' && state.draft===null && !state.syncing && state.local.every(x=>x.status!=='queued')")
+   def cell(q,col,row=0,group=None):
+    return page.locator(f'[data-q="{q}"][data-col="{col}"][data-row="{row}"]'+(f'[data-group="{group}"]' if group is not None else ''))
+   def field(q,col):return page.locator(f'[data-q="{q}"][data-col="{col}"]')
+   start('household','REVISED-HH-001',gps='Yes');page.get_by_role('button',name='Capture GPS location').click();page.wait_for_function("() => document.querySelector('#gps-status').textContent.includes('7.12346')")
+   # A record's answers and dwelling coordinates persist in different stores.
+-  stored=page.evaluate("""async()=>{const d=await new Promise(r=>{const q=indexedDB.open('gridfield-v1',2);q.onsuccess=()=>r(q.result)});const read=n=>new Promise(r=>{const q=d.transaction(n).objectStore(n).getAll();q.onsuccess=()=>r(q.result)});return {surveys:await read('surveys'),locations:await read('locations')}}""")
++  stored=page.evaluate("""async()=>{const d=await new Promise(r=>{const q=indexedDB.open('gridfield-v1',3);q.onsuccess=()=>r(q.result)});const read=n=>new Promise(r=>{const q=d.transaction(n).objectStore(n).getAll();q.onsuccess=()=>r(q.result)});return {surveys:await read('surveys'),locations:await read('locations')}}""")
+   assert 'location' not in stored['surveys'][0] and len(stored['locations'])==1
+   page.locator('[data-step="2"]').click();field('B5','interruptions').fill('3');field('B5','longest').fill('8');field('B5','total').fill('20');page.locator('input[data-q="B10"]').first.check()
+   page.locator('[data-step="3"]').click();cell('C_loads','qty').fill('1');cell('C_loads','watts').fill('15');cell('C_loads','hours').fill('4');cell('C_loads','time').fill('E');cell('C_loads','load_type').select_option('ES');cell('C_loads','months').fill('All year');cell('C_loads','source').select_option('N');page.locator('textarea[data-q="C4"]').fill('Cold storage')
+@@ -39,9 +39,9 @@ try:
+   start('community','REVISED-COMM-001');page.locator('[data-step="2"]').click();page.locator('[data-add-facility]').click();page.locator('[data-facility-name][data-group="0"]').fill('Health station A');cell('J_equipment','equipment',group=0).fill('Vaccine refrigerator');cell('J_equipment','qty',group=0).fill('1');cell('J_equipment','watts',group=0).fill('100');cell('J_equipment','critical',group=0).select_option('Y');cell('J_equipment','backup_hours',group=0).fill('72');cell('J_equipment','source',group=0).select_option('N');page.locator('[data-add-facility]').click();page.locator('[data-facility-name][data-group="1"]').fill('School B');cell('J_equipment','equipment',group=1).fill('Emergency lights');assert page.evaluate('document.documentElement.scrollWidth<=innerWidth');page.screenshot(path=str(artifacts/'facility-inventory-mobile.png'),full_page=True)
+   page.locator('[data-step="3"]').click();field('K9','solar').fill('June to August');page.locator('[data-step="4"]').click();field('L2','legal').fill('Confirm FPIC applicability under NCIP rules');field('L2','customary').fill('Customary leaders deliberate separately');field('L2','household').fill('Voluntary interview consent');page.locator('input[data-q="L6"]').first.check();page.locator('input[data-q="L6"]').nth(1).check();finish()
+   start('observation','REVISED-SITE-001',photo='Yes');page.locator('[data-step="1"]').click();cell('O_checklist','answer',0).select_option('Yes');cell('O_checklist','value',0).fill('Generator: 10 kW; condition fair');cell('O_checklist','answer',6).select_option('Yes');cell('O_checklist','notes',6).fill('External photo reference, separately consented');finish()
+-  admin=browser.new_context(viewport={'width':1440,'height':1000});ap=admin.new_page();ap.on('pageerror',lambda e:errors.append(str(e)));ap.goto(url);ap.get_by_role('button',name='Open dashboard').click();ap.get_by_role('heading',name='Every conversation counts.').wait_for();data=admin.request.get(url+'/api/dashboard').json();new=[r for r in data['surveys'] if r['respondent'].startswith('REVISED-')];assert len(new)==3
++  admin=browser.new_context(viewport={'width':1440,'height':1000});ap=admin.new_page();ap.on('pageerror',lambda e:errors.append(str(e)));ap.goto(url);ap.get_by_role('button',name='Open dashboard').click();ap.get_by_role('heading',name='Every conversation counts.').wait_for();data=admin.request.get(url+'/api/dashboard').json();new=[r for r in data['surveys'] if r.get('reference_mode')=='allocated-v1'];assert len(new)==3
+   hh=next(r for r in new if r['instrument']=='household');assert set(k for k in hh['answers'] if k.startswith('D'))=={'D1'};assert 'location' not in hh and hh['has_location'];assert hh['coarse_location']['lat']==7.12
+-  ap.locator('[data-view="responses"]').first.click();ap.locator('#version-filter').select_option('2026-revised-2');assert ap.locator('tbody tr').count()==3;ap.locator('[data-survey="'+hh['id']+'"]').first.click();ap.get_by_role('button',name='View restricted exact GPS').click();ap.locator('#restricted-gps').filter(has_text='7.123456').wait_for();ap.get_by_role('button',name='Close dialog').click();ap.locator('[data-view="insights"]').first.click();ap.get_by_text('Tariff scenarios — responses by exact terms').wait_for();ap.screenshot(path=str(artifacts/'revised-dashboard.png'),full_page=True)
++  ap.locator('[data-view="responses"]').first.click();ap.locator('#version-filter').select_option(json.loads((ROOT/'static/survey.json').read_text(encoding='utf-8-sig'))['version']);assert ap.locator('tbody tr').count()==3;ap.locator('[data-survey="'+hh['id']+'"]').first.click();ap.get_by_role('button',name='View restricted exact GPS').click();ap.locator('#restricted-gps').filter(has_text='7.123456').wait_for();ap.get_by_role('button',name='Close dialog').click();ap.locator('[data-view="insights"]').first.click();ap.get_by_text('Tariff scenarios — responses by exact terms').wait_for();ap.screenshot(path=str(artifacts/'revised-dashboard.png'),full_page=True)
+   # Simulate an older phone upgrading from the original one-store IndexedDB.
+   legacy=browser.new_context(viewport={'width':390,'height':844});lp=legacy.new_page();lp.on('pageerror',lambda e:errors.append(str(e)));lp.goto(url+'/static/icon.svg');u=legacy.request.post(url+'/api/login',data={'username':'maria','password':'FieldworkDemo!2026'}).json()['user'];now=datetime.now(timezone.utc).isoformat();queued_id=str(uuid.uuid4());draft_id=str(uuid.uuid4())
+   base=dict(owner=u['id'],version='2026-pilot-1',community='Bucana',consent='Yes',gps_consent='Yes',location={'lat':7.112233,'lng':125.445566,'accuracy':20},started_at=now,updated_at=now,step=1)
+diff --git a/tests/browser_smoke.py b/tests/browser_smoke.py
+index 2730a1b..d630875 100644
+--- a/tests/browser_smoke.py
++++ b/tests/browser_smoke.py
+@@ -34,6 +34,8 @@ try:
+         page.locator('#enum-username').fill('browser-test')
+         page.locator('#enum-password').fill('BrowserTest!2026')
+         page.locator('#enum-community').fill('Test community')
++        page.locator('#enum-municipality').fill('Davao / Davao del Sur')
++        page.locator('#enum-language').fill('Cebuano')
+         page.get_by_role('button',name='Create enumerator').click()
+         page.get_by_role('dialog').wait_for(state='hidden')
+         page.locator('[data-view="enumerators"]').first.click()
+@@ -74,13 +76,14 @@ try:
+         page.wait_for_function("() => document.querySelector('.notice').textContent.includes('Offline app files are ready')")
+         context.set_offline(True)
+         page.locator('[data-start="household"]').click()
+-        page.locator('#respondent').fill('OFFLINE-BROWSER-001')
++        reference=page.locator('#respondent').input_value()
++        assert reference=='maria-HE-001' and page.locator('#respondent').get_attribute('readonly') is not None
+         page.locator('input[name="consent"][value="Yes"]').check()
+         page.locator('input[name="gps_consent"][value="No"]').check()
+         page.locator('input[name="photo_consent"][value="No"]').check()
+         page.locator('input[name="audio_consent"][value="No"]').check()
+-        page.locator('#meta-municipality_province').fill('Davao / Davao del Sur')
+-        page.locator('#meta-language').fill('Cebuano')
++        assert page.locator('#meta-municipality_province').input_value()=='Davao City / Davao del Sur'
++        assert page.locator('#meta-language').input_value()=='Cebuano'
+         page.get_by_role('button',name='Continue',exact=True).click()
+         page.locator('input[data-q="A1"][value="Female"]').check()
+         page.get_by_role('button',name='Save & close').click()
+@@ -100,21 +103,21 @@ try:
+         page.screenshot(path=str(artifacts/'mobile-queue.png'),full_page=True)
+         context.set_offline(False)
+         page.wait_for_function("() => document.querySelectorAll('[data-resume]').length === 0")
+-        page.locator('.draft-item strong').filter(has_text='OFFLINE-BROWSER-001').first.wait_for()
++        page.locator('.draft-item strong').filter(has_text=reference).first.wait_for()
+         # Exactly one server row after reconnect, with the correct account ownership.
+         summary=page.request.get(url+'/api/my-surveys').json()['surveys']
+-        assert len([s for s in summary if s['respondent']=='OFFLINE-BROWSER-001'])==1
++        assert len([s for s in summary if s['respondent']==reference])==1
+         assert page.request.get(url+'/api/dashboard').status==403
+         page.locator('[data-action="menu"]').click()
+         page.locator('[data-view="collect"]').first.click()
+         page.locator('[data-start="community"]').click()
+-        page.locator('#respondent').fill('COMMUNITY-TEST')
++        assert page.locator('#respondent').input_value()=='maria-CI-001'
+         page.locator('input[name="consent"][value="Yes"]').check()
+         page.locator('input[name="gps_consent"][value="No"]').check()
+         page.locator('input[name="photo_consent"][value="No"]').check()
+         page.locator('input[name="audio_consent"][value="No"]').check()
+-        page.locator('#meta-municipality_province').fill('Davao / Davao del Sur')
+-        page.locator('#meta-language').fill('Cebuano')
++        assert page.locator('#meta-municipality_province').input_value()=='Davao City / Davao del Sur'
++        assert page.locator('#meta-language').input_value()=='Cebuano'
+         page.get_by_role('button',name='Continue',exact=True).click()
+         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+         page.screenshot(path=str(artifacts/'mobile-survey.png'),full_page=True)
+diff --git a/tests/test_app.py b/tests/test_app.py
+index 8f19260..c5c5591 100644
+--- a/tests/test_app.py
++++ b/tests/test_app.py
+@@ -60,7 +60,7 @@ def test_validation_and_skip_rules(env):
+ 
+ def test_admin_workflow_export_and_disable(env):
+  app,c=env;h=login(c);s=survey();s['respondent']='=HYPERLINK("bad")';c.post('/api/surveys',json=s,headers=h)
+- h=login(c,'admin');r=c.post('/api/users',headers=h,json={'name':'New Person','username':'new','password':'long-password-2026','community':'Island','target':42});assert r.status_code==201
++ h=login(c,'admin');r=c.post('/api/users',headers=h,json={'name':'New Person','username':'new','password':'long-password-2026','community':'Island','municipality_province':'Davao / Davao del Sur','language':'Cebuano','target':42});assert r.status_code==201
+  u=next(x for x in c.get('/api/dashboard').json['users'] if x['username']=='new');assert u['target']==42
+  assert c.patch('/api/users/'+u['id'],headers=h,json={'active':False,'target':50}).status_code==200
+  assert c.post('/api/login',json={'username':'new','password':'long-password-2026'}).status_code==401
+diff --git a/ENUMERATOR-REFERENCE-UPDATE.md b/ENUMERATOR-REFERENCE-UPDATE.md
+new file mode 100644
+index 0000000..dce7b5a
+--- /dev/null
++++ b/ENUMERATOR-REFERENCE-UPDATE.md
+@@ -0,0 +1,92 @@
++# Automatic enumerator reference IDs and administrator-managed assignments
++
++This update is based on GitHub commit `0c1e27f` of `minna-lproc/microgrid-fieldwork`. It preserves your current questionnaire edits, questionnaire version, Windows/CSV codebook fixes, submitted-interview deletion, and removal of the Sampling & field notes form section. It does not push to GitHub or change PythonAnywhere merely by being downloaded.
++
++## New references
++
++New interviews automatically receive a read-only reference in this format:
++
++| Instrument | Example for username `maria` |
++| --- | --- |
++| Household & enterprise | `maria-HE-001`, `maria-HE-002`, … |
++| Community informant | `maria-CI-001`, `maria-CI-002`, … |
++| Site observation | `maria-SO-001`, `maria-SO-002`, … |
++
++Use the actual enumerator username in place of `maria`; `enumerator-username` is not a literal prefix. Each enumerator has three independent counters. The number has a minimum of three digits and expands normally after 999. It is assigned when an interview **starts**, not only when it is submitted, and never gets reused after a draft is discarded or a submitted interview is deleted. Earlier manual references are not renamed.
++
++## Administrator setup (one time per account, editable later)
++
++Sign in as an administrator → **Enumerators → Add enumerator**. Besides name, username and password, set:
++
++- **Barangay**
++- **Municipality / Province**
++- **Interview language(s)**
++- The interview target
++
++For an existing account, open **Manage enumerator**, complete the three defaults, and save. Newly created accounts require complete defaults. Existing accounts are migrated with empty municipality/language fields rather than having an area or language guessed from earlier interviews. The administrator must configure those accounts before their devices can start new automatically numbered interviews. Existing drafts can still be resumed.
++
++The enumerator sees these values automatically in each new interview and cannot change the generated reference, barangay, municipality/province or assigned language there. Assigned language does not automatically translate the form or independently verify what language was spoken. Administrators can update defaults later through Manage enumerator. Phones receive updated defaults on sign-in, reconnection, the Refresh assignment action, and successful in-app check-ins while connected. Old drafts and submitted records retain their original details. Changing an assignment does not reset the number sequence or rewrite collected data.
++
++Use a field enumerator account to start new interviews. Administrator accounts manage accounts and reports; they do not reserve field reference ranges. Existing administrator-created drafts remain resumable.
++
++## Prepare every phone before offline fieldwork
++
++1. Connect to the deployed HTTPS app and sign in as the enumerator.
++2. Wait for app-shell offline readiness.
++3. In Field collection or Settings, select **Refresh assignment & prepare offline IDs**.
++4. Confirm the assigned area/language and the displayed **HE / CI / SO IDs ready** counts. Each reservation provides at least 100 numbers per type, or the account's current target if it is larger. Set an appropriate target before first preparing the phone.
++5. Start a practice interview as authorised by the coordinator and confirm automatic ID/defaults and airplane-mode operation. A discarded practice draft consumes its number; it does not reset the counter.
++
++Prepared phones allocate and save the next number atomically in IndexedDB, alongside creating the draft. Starting a prepared interview does not require waiting for a network request. Reopening the app, signing out/in, deletion or sync does not reset the local next number. Multiple tabs share the same transaction-protected pool.
++
++If a type's pool runs out offline, the app blocks **new** interviews of that type and asks you to reconnect and prepare more IDs. Saved drafts, queued interviews and the other types' pools remain available. It never silently substitutes a temporary reference or renumbers an interview during sync. The readiness screen shows the actual remaining numbers; plan fieldwork around that capacity. Updating a target after a pool is already reserved does not enlarge that existing pool; the next reservation uses the current target.
++
++### Several phones for one account
++
++The central server reserves non-overlapping ranges, so a second installation will typically start at `101` when the first device reserved `001–100`. With a larger target its range can start later. References remain unique even while both devices are offline, but there can be gaps and their collection times will not be globally sorted by number. One prepared phone per enumerator gives the simplest consecutive sequence. Cleared/reinstalled browser storage receives a new range instead of reusing possibly outstanding IDs. Never clear storage or uninstall before syncing: unique IDs do not recover unsynced answers.
++
++## Existing data and migration
++
++The application adds user-default columns, interview reference/assignment metadata, and separate counter, reservation, claim and assignment-history tables automatically at startup. The migration is repeatable and does not reset accounts, passwords, records or old IDs. The offline database is upgraded in place from version 1/2 to version 3, retaining surveys and the separate GPS store and adding an allocations store. Close other Gridfield tabs/windows when requested so the storage upgrade can finish.
++
++Administrator-approved assignment snapshots are retained separately from the live account defaults. An interview started offline under an older assignment can still sync after the administrator changes that account. The server validates the generated reference, range ownership, sequence and original assignment snapshot and rejects duplicate claims. Deleted references remain claimed, preventing reuse. No GPS or survey answers are stored in the reference tables.
++
++Previously prepared manual-ID drafts and older clients retain their earlier IDs and remain accepted where those codes do not conflict with another claimed/reserved reference. They are not converted into auto-numbered drafts. A rare old manual ID that already uses the same new username/type/number and collides with a reservation is retained on the device with a conflict error for the coordinator; it is not silently overwritten or deleted. Existing matching formatted manual IDs already on the server are accounted for when reserving the next range.
++
++## Install through your existing GitHub → PythonAnywhere workflow
++
++1. Back up the live SQLite database with SQLite's online backup API, or stop the app before copying the database and WAL files. Retain the existing secret key and WSGI configuration.
++2. Extract this update into your local Git checkout, preserving all paths. It contains source changes and tests, not production data or credentials. If you have additional uncommitted edits in these same files, merge them rather than blindly overwriting. A Git patch is included as an alternative; apply only after `git apply --check` succeeds.
++3. Your survey JSON files are deliberately not changed. Run the generator against your local questionnaire to keep the included codebook descriptions and current question text in sync:
++
++```powershell
++python scripts/generate_codebook.py
++python scripts/generate_codebook.py --check
++python -m pytest -q
++```
++
++4. Commit **all update files** and push to `main`, for example:
++
++```powershell
++git add app.py static/app.js static/style.css static/sw.js static/codebook.json static/codebook.csv tests README.md ENUMERATOR-REFERENCE-UPDATE.md
++git commit -m "Add offline-safe enumerator IDs and administrator assignments"
++git push origin main
++```
++
++5. Wait for GitHub Actions to finish deployment and the PythonAnywhere reload. No dependency change, database reset, new administrator or demo seeding is needed. Keep `PYTHONANYWHERE_PROJECT_DIR` at your existing correct app folder.
++6. As administrator, complete the new defaults for every existing enumerator account.
++7. Have each enumerator reopen the updated app online with their own account, refresh assignments and prepare IDs, then verify offline readiness before departure. Do not clear browser data; old drafts/queues are retained. During migration, prefer coordinating an update after a normal sync where possible.
++
++This changes field assignment/ID behaviour, not the questionnaire's scientific content or its version. The separate app-cache version is refreshed by your normal deployment workflow. Historical questionnaire-version support remains as in the baseline repository.
++
++## Checks
++
++The API suite covers administrator-only defaults, validation, independent counters, idempotent retries, existing formatted references, two concurrent devices, tamper/duplicate rejection, assignment history, deletion without reuse and repeatable database migration. Browser suites cover desktop/mobile forms, readonly defaults, new IDs, refresh/relogin persistence, local deletion without reuse, a repeated late reservation response, simultaneous tabs, a second device, another account on the same installation, offline allocation and exhaustion, changed assignments, older offline drafts and later sync. Tests use isolated temporary databases; no live interviews are changed.
++
++Optional browser commands (Playwright/Chromium required):
++
++```sh
++python tests/browser_smoke.py
++python tests/browser_revised.py
++python tests/browser_reference_ids.py
++```
+diff --git a/tests/browser_reference_ids.py b/tests/browser_reference_ids.py
+new file mode 100644
+index 0000000..c44c4e4
+--- /dev/null
++++ b/tests/browser_reference_ids.py
+@@ -0,0 +1,68 @@
++"""Generated IDs and admin assignments through real online/offline browser flows."""
++import os,sys,socket,subprocess,tempfile,time,urllib.request
++from pathlib import Path
++from playwright.sync_api import sync_playwright
++ROOT=Path(__file__).resolve().parents[1];artifacts=Path(tempfile.mkdtemp(prefix='gridfield-reference-'))
++env=dict(os.environ,DATABASE=str(artifacts/'test.sqlite'),DEMO='1')
++with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
++env['PORT']=str(port)
++subprocess.run([sys.executable,'-m','flask','--app','app','seed-demo'],cwd=ROOT,env=env,check=True,capture_output=True)
++log=open(artifacts/'server.log','w');server=subprocess.Popen([sys.executable,'app.py'],cwd=ROOT,env=env,stdout=log,stderr=log);url=f'http://127.0.0.1:{port}'
++try:
++ for _ in range(100):
++  try:urllib.request.urlopen(url,timeout=1);break
++  except Exception:time.sleep(.1)
++ with sync_playwright() as p:
++  args={'headless':True}
++  if os.environ.get('CHROMIUM_PATH'):args['executable_path']=os.environ['CHROMIUM_PATH']
++  browser=p.chromium.launch(**args);errors=[]
++  def watch(page):page.on('pageerror',lambda e:errors.append(str(e)));return page
++  def ready(page):page.wait_for_function("() => state.references?.length===3 && state.references.every(x=>x.status==='ready')")
++  def collect(page,kind):
++   if page.locator('[data-start]').count()==0:
++    if page.viewport_size['width']<700:page.locator('[data-action="menu"]').click()
++    page.locator('[data-view="collect"]').first.click()
++   page.locator('[data-start="'+kind+'"]').click();page.locator('#respondent').wait_for()
++   return page.locator('#respondent').input_value()
++  def close_draft(page):page.get_by_role('button',name='Save & close').click();page.get_by_role('heading',name='Every interview has a place.').wait_for()
++  context=browser.new_context(viewport={'width':1280,'height':1000});page=watch(context.new_page());page.goto(url);page.get_by_role('button',name='Try field collection').click();ready(page)
++  original=page.evaluate("() => structuredClone(state.references.find(r=>r.instrument==='household'))")
++  assert collect(page,'household')=='maria-HE-001'
++  for selector in ['#respondent','#community','#meta-municipality_province','#meta-language']:assert page.locator(selector).get_attribute('readonly') is not None
++  assert page.locator('#community').input_value()=='Bucana' and page.locator('#meta-language').input_value()=='Cebuano'
++  close_draft(page);assert collect(page,'household')=='maria-HE-002';close_draft(page)
++  # Repeating a delayed grant response must not reset the locally consumed counter.
++  page.evaluate("async row=>{await saveReservation(row,row);await loadReferences();}",original)
++  page.reload();ready(page);assert collect(page,'household')=='maria-HE-003';third=page.evaluate('() => state.draft.id');close_draft(page)
++  page.locator('[data-delete="'+third+'"]').click();page.locator('#confirm-delete').click();assert collect(page,'household')=='maria-HE-004';close_draft(page)
++  assert collect(page,'community')=='maria-CI-001';close_draft(page)
++  assert collect(page,'observation')=='maria-SO-001';close_draft(page)
++  # Same browser installation, two open tabs: atomic allocation prevents duplicates.
++  other_tab=watch(context.new_page());other_tab.goto(url);ready(other_tab)
++  page.locator('[data-view="collect"]').first.click()
++  page.evaluate("() => {window.creation=startInterview('household');}")
++  other_tab.evaluate("() => {window.creation=startInterview('household');}")
++  page.locator('#respondent').wait_for();other_tab.locator('#respondent').wait_for()
++  assert {page.locator('#respondent').input_value(),other_tab.locator('#respondent').input_value()}=={'maria-HE-005','maria-HE-006'}
++  close_draft(page);close_draft(other_tab);other_tab.close()
++  # Offline reopen keeps the next counter and administrator defaults.
++  page.wait_for_function('() => state.ready');context.set_offline(True);page.reload();page.get_by_role('heading',name='Start with a conversation.').wait_for();page.set_viewport_size({'width':390,'height':844});assert collect(page,'household')=='maria-HE-007';old_id=page.evaluate('() => state.draft.id');assert page.locator('#meta-language').input_value()=='Cebuano';assert page.evaluate('document.documentElement.scrollWidth<=innerWidth');page.screenshot(path=str(artifacts/'generated-id-mobile.png'),full_page=True)
++  # Another device reserves a disjoint range, not the same 001 sequence.
++  device2=browser.new_context(viewport={'width':1280,'height':1000});p2=watch(device2.new_page());p2.goto(url);p2.get_by_role('button',name='Try field collection').click();ready(p2);assert collect(p2,'household')=='maria-HE-101';close_draft(p2)
++  # Administrator changes defaults. Existing offline interviews must keep old values.
++  admin=browser.new_context(viewport={'width':1280,'height':1000});ap=watch(admin.new_page());ap.goto(url);ap.get_by_role('button',name='Open dashboard').click();ap.get_by_role('heading',name='Every conversation counts.').wait_for();roster=admin.request.get(url+'/api/dashboard').json()['users'];maria=next(u for u in roster if u['username']=='maria');ap.locator('[data-view="enumerators"]').first.click();ap.locator('[data-edit-user="'+maria['id']+'"]').click();ap.locator('#enum-community').fill('New barangay');ap.locator('#enum-municipality').fill('New municipality / Province');ap.locator('#enum-language').fill('English');ap.get_by_role('dialog').screenshot(path=str(artifacts/'administrator-assignment.png'));ap.get_by_role('button',name='Save changes',exact=True).click();ap.get_by_role('dialog').wait_for(state='hidden')
++  context.set_offline(False);page.wait_for_function("() => state.user.language==='English' && !referencePreparation")
++  assert page.locator('#community').input_value()=='Bucana' and page.locator('#meta-language').input_value()=='Cebuano'
++  page.locator('input[name="consent"][value="Yes"]').check();page.locator('input[name="gps_consent"][value="No"]').check();page.locator('input[name="photo_consent"][value="No"]').check();page.locator('input[name="audio_consent"][value="No"]').check();page.locator('[data-step]').last.click();page.locator('#review-confirm').check();page.get_by_role('button',name='Finish interview').click();page.wait_for_function("id => !state.local.some(x=>x.id===id)",arg=old_id)
++  stored=next(r for r in admin.request.get(url+'/api/dashboard').json()['surveys'] if r['id']==old_id);assert stored['respondent']=='maria-HE-007' and stored['metadata']['language']=='Cebuano'
++  assert collect(page,'household')=='maria-HE-008';assert page.locator('#community').input_value()=='New barangay' and page.locator('#meta-language').input_value()=='English';close_draft(page)
++  # Exhausted offline pool must block a new interview without altering saved drafts.
++  page.evaluate("""async()=>{await new Promise((resolve,reject)=>{const tx=db.transaction('allocations','readwrite'),s=tx.objectStore('allocations'),r=s.get(referenceKey(state.user,'household'));r.onsuccess=()=>{const row=r.result;row.next=row.end+1;s.put(row)};tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});await loadReferences();}""")
++  context.set_offline(True);page.evaluate("() => startInterview('household')");assert page.evaluate('() => state.draft===null');assert 'No reserved HE IDs remain' in page.locator('#toast').inner_text()
++  context.set_offline(False);page.wait_for_function("() => state.references.some(r=>r.instrument==='household' && referenceRemaining(r)>0)");assert collect(page,'household')=='maria-HE-201';close_draft(page)
++  # A different enumerator on the second device gets a separate username/counter.
++  p2.get_by_role('button',name='Sign out',exact=True).click();p2.locator('#username').fill('juan');p2.locator('#password').fill('FieldworkDemo!2026');p2.get_by_role('button',name='Sign in to workspace').click();ready(p2);assert collect(p2,'household')=='juan-HE-001';assert p2.locator('#community').input_value()=='Talomo'
++  assert not errors,errors;browser.close()
++ print('PASS: per-type/per-enumerator IDs, readonly defaults, refresh, deletion without reuse, late-grant retry, concurrent tabs, independent devices, offline allocation/exhaustion, administrator edits and old-assignment sync.')
++ print('Browser artifacts:',artifacts)
++finally:server.terminate();server.wait(timeout=10);log.close()
+diff --git a/tests/test_reference_ids.py b/tests/test_reference_ids.py
+new file mode 100644
+index 0000000..d4c4f14
+--- /dev/null
++++ b/tests/test_reference_ids.py
+@@ -0,0 +1,147 @@
++import json,sqlite3,uuid
++from concurrent.futures import ThreadPoolExecutor
++import pytest
++from app import REFERENCE_BLOCK_SIZE,create_app
++from test_app import env,login,survey
++
++
++def configure(c,user='field',**changes):
++ h=login(c,'admin');data={'community':'Bucana','municipality_province':'Davao / Davao del Sur','language':'Cebuano'};data.update(changes)
++ response=c.patch('/api/users/'+user,headers=h,json=data);assert response.status_code==200,response.json
++ return login(c,user)
++
++
++def reserve(c,h,instrument='household',device=None,request=None):
++ u=c.get('/api/session').json['user']
++ data={'user_id':u['id'],'instrument':instrument,'device_id':device or str(uuid.uuid4()),'request_id':request or str(uuid.uuid4()),'assignment_version':u['assignment_version']}
++ return c.post('/api/reference-ranges',headers=h,json=data),data
++
++
++def allocated_payload(grant,sequence=None):
++ sequence=grant['start'] if sequence is None else sequence
++ d=survey();code={'household':'HE','community':'CI','observation':'SO'}[grant['instrument']]
++ d.update(instrument=grant['instrument'],respondent=grant['username']+'-'+code+'-'+str(sequence).zfill(3),reference_mode='allocated-v1',reference_allocation_id=grant['id'],reference_sequence=sequence,assignment_version=grant['assignment_version'],community=grant['assignment']['community'],metadata={k:grant['assignment'][k] for k in ['municipality_province','language']})
++ if d['instrument']!='household':d['answers']={}
++ return d
++
++
++def test_admin_assignments_required_and_update_without_changing_history(env):
++ app,c=env;h=login(c,'admin')
++ base={'name':'New Enum','username':'newenum','password':'a-good-password-2026','community':'Bucana'}
++ assert c.post('/api/users',headers=h,json=base).status_code==400
++ base.update(municipality_province=' Davao / Davao del Sur ',language=' Cebuano ')
++ assert c.post('/api/users',headers=h,json=base).status_code==201
++ uid=next(u['id'] for u in c.get('/api/dashboard').json['users'] if u['username']=='newenum')
++ f=login(c,'newenum');u=c.get('/api/session').json['user'];assert u['language']=='Cebuano' and u['assignment_version']==0
++ assert c.patch('/api/users/'+uid,headers=f,json={'language':'English'}).status_code==403
++ h=login(c,'admin');assert c.patch('/api/users/'+uid,headers=h,json={'language':'English'}).status_code==200
++ u=next(u for u in c.get('/api/dashboard').json['users'] if u['id']==uid);assert u['assignment_version']==1 and u['language']=='English'
++ assert c.patch('/api/users/'+uid,headers=h,json={'target':50}).status_code==200
++ assert next(u for u in c.get('/api/dashboard').json['users'] if u['id']==uid)['assignment_version']==1
++ assert c.patch('/api/users/'+uid,headers=h,json={'community':''}).status_code==400
++
++
++def test_reference_endpoint_permissions_and_incomplete_legacy_accounts(env):
++ app,c=env
++ assert c.post('/api/reference-ranges',json={}).status_code==401
++ h=login(c,'admin');assert c.post('/api/reference-ranges',headers=h,json={}).status_code==403
++ h=login(c);r,data=reserve(c,h);assert r.status_code==409
++ # Existing manually coded offline interviews remain accepted without resetting accounts.
++ assert c.post('/api/surveys',headers=h,json=survey()).status_code==201
++ h=configure(c);r,data=reserve(c,h);assert r.status_code==201
++ data['user_id']='other';assert c.post('/api/reference-ranges',headers=h,json=data).status_code==403
++ data['user_id']='field';data['device_id']='invalid';assert c.post('/api/reference-ranges',headers=h,json=data).status_code==400
++
++
++def test_independent_ranges_idempotent_reservations_and_multiple_devices(env):
++ app,c=env;h=configure(c);device=str(uuid.uuid4())
++ grants=[]
++ for kind in ['household','community','observation']:
++  r,data=reserve(c,h,kind,device);assert r.status_code==201,r.json
++  grant=r.json['allocation'];grants.append(grant)
++  assert grant['start']==1 and grant['end']==REFERENCE_BLOCK_SIZE
++  retry=c.post('/api/reference-ranges',headers=h,json=data)
++  assert retry.status_code==200 and retry.json['allocation']==grant
++  d=allocated_payload(grant);assert c.post('/api/surveys',headers=h,json=d).status_code==201
++  assert d['respondent']=={'household':'field-HE-001','community':'field-CI-001','observation':'field-SO-001'}[kind]
++ r,_=reserve(c,h,'household');assert r.json['allocation']['start']==REFERENCE_BLOCK_SIZE+1
++ h=configure(c,'other');r,_=reserve(c,h);assert r.json['allocation']['start']==1
++ assert c.post('/api/surveys',headers=h,json=allocated_payload(grants[0])).status_code==400
++
++
++def test_claims_reject_tampering_and_duplicate_numbers(env):
++ app,c=env;h=configure(c);r,_=reserve(c,h);g=r.json['allocation'];valid=allocated_payload(g)
++ for updates in [{'respondent':'invented-HE-001'},{'community':'Other barangay'},{'metadata':{'municipality_province':'Other','language':'Cebuano'}},{'reference_sequence':g['end']+1},{'reference_sequence':True},{'reference_allocation_id':str(uuid.uuid4())},{'assignment_version':999999},{'instrument':'community'}]:
++  d=allocated_payload(g);d.update(updates)
++  assert c.post('/api/surveys',headers=h,json=d).status_code==400,updates
++ assert c.post('/api/surveys',headers=h,json=valid).status_code==201
++ assert c.post('/api/surveys',headers=h,json=valid).json['duplicate']
++ d=allocated_payload(g);assert c.post('/api/surveys',headers=h,json=d).status_code==409
++ # Legacy clients also cannot take a number already reserved or claimed by another interview.
++ legacy=survey();legacy['respondent']='field-HE-002';assert c.post('/api/surveys',headers=h,json=legacy).status_code==409
++
++
++def test_assignment_changes_preserve_old_offline_snapshot(env):
++ app,c=env;h=configure(c);r,_=reserve(c,h);g=r.json['allocation'];old=allocated_payload(g)
++ h=login(c,'admin');assert c.patch('/api/users/field',headers=h,json={'community':'New barangay','municipality_province':'New municipality / province','language':'English'}).status_code==200
++ h=login(c);assert c.post('/api/surveys',headers=h,json=old).status_code==201
++ r,_=reserve(c,h);new=r.json['allocation'];assert new['start']==101 and new['assignment_version']==g['assignment_version']+1
++ assert new['assignment']['community']=='New barangay' and new['assignment']['language']=='English'
++ fresh=allocated_payload(new);assert c.post('/api/surveys',headers=h,json=fresh).status_code==201
++ h=login(c,'admin');rows=c.get('/api/dashboard').json['surveys'];assert next(x for x in rows if x['id']==old['id'])['metadata']['language']=='Cebuano';assert next(x for x in rows if x['id']==fresh['id'])['metadata']['language']=='English'
++ assert 'reference_sequence' in c.get('/api/export').text
++
++
++def test_deleted_reference_is_never_reused_and_refusal_keeps_identity(env):
++ app,c=env;h=configure(c);r,_=reserve(c,h);g=r.json['allocation'];d=allocated_payload(g)
++ assert c.post('/api/surveys',headers=h,json=d).status_code==201
++ a=login(c,'admin');assert c.delete('/api/surveys/'+d['id'],headers=a,json={'confirm_respondent':d['respondent']}).status_code==200
++ h=login(c);assert c.post('/api/surveys',headers=h,json=d).json['deleted']
++ replacement=allocated_payload(g);assert c.post('/api/surveys',headers=h,json=replacement).status_code==409
++ declined=allocated_payload(g,g['start']+1);declined['consent']='No'
++ assert c.post('/api/surveys',headers=h,json=declined).status_code==201
++ h=login(c,'admin');row=c.get('/api/dashboard').json['surveys'][0];assert row['respondent']=='field-HE-002' and row['metadata']=={} and row['reference_mode']=='allocated-v1'
++
++
++def test_existing_formatted_manual_ids_seed_next_number(env):
++ app,c=env;h=login(c);d=survey();d['respondent']='field-HE-008';assert c.post('/api/surveys',headers=h,json=d).status_code==201
++ h=configure(c);r,_=reserve(c,h);assert r.json['allocation']['start']==9
++
++
++def test_concurrent_devices_receive_disjoint_ranges(env):
++ app,c=env;configure(c)
++ def allocate(_):
++  client=app.test_client();h=login(client);r,_=reserve(client,h);assert r.status_code==201;return r.json['allocation']
++ with ThreadPoolExecutor(max_workers=2) as pool:grants=list(pool.map(allocate,range(2)))
++ assert sorted(g['start'] for g in grants)==[1,101]
++ assert len({g['id'] for g in grants})==2
++
++
++def test_additive_account_migration_preserves_records(env):
++ app,c=env;h=login(c);d=survey();assert c.post('/api/surveys',headers=h,json=d).status_code==201
++ con=sqlite3.connect(app.config['DATABASE'])
++ for name in ['municipality_province','language','assignment_version']:con.execute('ALTER TABLE users DROP COLUMN '+name)
++ for name in ['reference_mode','reference_allocation_id','reference_sequence']:con.execute('ALTER TABLE surveys DROP COLUMN '+name)
++ con.commit();con.close()
++ for _ in range(2):
++  updated=create_app({'TESTING':True,'SECRET_KEY':'testing-only','DATABASE':app.config['DATABASE']});client=updated.test_client();login(client,'admin');dash=client.get('/api/dashboard').json
++  assert len(dash['users'])==2 and len(dash['surveys'])==1 and dash['surveys'][0]['id']==d['id']
++  assert dash['surveys'][0]['reference_mode']=='manual'
++  assert all(u['municipality_province']=='' and u['language']=='' for u in dash['users'])
++
++
++def test_one_reserved_range_can_use_new_defaults_without_resetting_sequence(env):
++ app,c=env;h=configure(c);r,_=reserve(c,h);grant=r.json['allocation'];first=allocated_payload(grant)
++ assert c.post('/api/surveys',headers=h,json=first).status_code==201
++ h=login(c,'admin');assert c.patch('/api/users/field',headers=h,json={'community':'New barangay','language':'English'}).status_code==200
++ h=login(c);profile=c.get('/api/session').json['user'];second=allocated_payload(grant,grant['start']+1)
++ second.update(assignment_version=profile['assignment_version'],community=profile['community'],metadata={k:profile[k] for k in ['municipality_province','language']})
++ assert second['respondent']=='field-HE-002'
++ assert c.post('/api/surveys',headers=h,json=second).status_code==201
++ checkin=c.post('/api/checkin',headers=h,json={}).json
++ assert checkin['user']['language']=='English'
++
++
++def test_initial_pool_covers_a_large_assigned_target(env):
++ app,c=env;configure(c);h=login(c,'admin');assert c.patch('/api/users/field',headers=h,json={'target':500}).status_code==200
++ h=login(c);r,_=reserve(c,h);assert r.json['allocation']['start']==1 and r.json['allocation']['end']==500
